@@ -73,9 +73,9 @@
   cannot write the mounted repository root and confirm startup fails with an
   error naming that path rather than serving partially.
 - [x] 3.4 Run `just spec-validate` and confirm every change spec validates.
-- [ ] 3.5 After merge, confirm GHCR publishes `main` and `sha-<12>` for a main
+- [x] 3.5 After merge, confirm GHCR publishes `main` and `sha-<12>` for a main
   commit and the exact tag plus `latest` for a `vX.Y.Z` tag; pull the published
   tag on both architectures if available and confirm `version` reports the
   injected version.
-- [ ] 3.6 Archive the change with the archive workflow and sync the two new
+- [x] 3.6 Archive the change with the archive workflow and sync the two new
   capabilities to `openspec/specs/`.
