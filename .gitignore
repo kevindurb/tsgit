@@ -1,0 +1,23 @@
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.yaml
+secrets.yml
+
+# Logs and local state
+*.log
+.worktrees/
+
+# OpenCode local artifacts; the command and skill scaffolding is committed
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock

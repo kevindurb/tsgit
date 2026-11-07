@@ -1,0 +1,8 @@
+schema: spec-driven
+
+# Shown to AI when creating artifacts.
+context: |
+  TODO: replace this block when you start the project.
+  Cover the tech stack, what the project is, the real `just` commands, and the
+  conventions an agent must follow. Keep it short — detail belongs in
+  .agents/skills/.
