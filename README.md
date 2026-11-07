@@ -23,6 +23,8 @@ implemented.
 - Creates a repository on an authorized first push.
 - Lists the repositories you can read at `https://<hostname>/`.
 - Authorizes from Tailscale identity and ACL tags. There is no user database.
+- Optionally publishes a policy-selected, read-only subset to the internet
+  through Tailscale Funnel.
 
 It does not serve users outside the tailnet except read-only Funnel repositories
 that tailnet policy designates, run its own authentication, or act as a CI
@@ -107,6 +109,44 @@ git push -u origin main
 
 If HTTPS is unavailable, the node serves plain HTTP on port 80, so use
 `http://tsgit/`. WireGuard still encrypts the traffic.
+
+## Public read-only access (Funnel)
+
+Off by default. Publishing a curated subset to the internet needs all three
+keys:
+
+1. Start the server with `TSGIT_FUNNEL=true` (or `serve --funnel`).
+2. Give the node the `funnel` attribute.
+3. Give it a `cap/funnel` payload under `nodeAttrs.app` naming the repositories
+   to publish.
+
+```json
+"nodeAttrs": [{
+  "target": ["tag:tsgit"],
+  "attr": ["funnel"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/funnel": [
+      {"repos": ["public/*"]}
+    ]
+  }
+}]
+```
+
+Funnel also needs MagicDNS, HTTPS certificates, and a supported port (`443`,
+`8443`, or `10000`). None of the three keys alone exposes anything.
+
+The public URL is the node's DNS name:
+
+```sh
+git clone https://tsgit.<tailnet>.ts.net/public/widget.git
+```
+
+Only clone/fetch and the filtered index are public. Receive-pack,
+push-to-create, and every mutation return `404`; the payload has no access
+field, so public write is impossible. If a prerequisite is missing, `tsgit`
+logs an error and keeps serving the tailnet. See
+[`docs/access-control.md`](docs/access-control.md) and
+[`docs/deployment.md`](docs/deployment.md).
 
 ## Local development
 
