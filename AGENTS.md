@@ -1,7 +1,10 @@
-# <project>
+# tsgit
 
-TODO: one paragraph — what this is, who it is for, and what it explicitly does
-not do.
+A git forge built for tailnets. It serves repositories to peers Tailscale has
+already authenticated, and derives authorization from tailnet identity (user
+logins and ACL tags) instead of maintaining its own account system. Go, single
+binary, one node. It explicitly does not serve users outside the tailnet, run
+its own authentication, or do CI. See `docs/project.md`.
 
 `docs/` holds project documentation. `openspec/` holds change artifacts.
 
@@ -12,10 +15,11 @@ Everything runs through `just`.
 | Command | Does |
 |---|---|
 | `just` | List recipes |
-| `just fmt` | Format check; fails if anything is unformatted |
-| `just lint` | Lint and static analysis |
-| `just build` | Build |
-| `just test` | Test suite |
+| `just fmt` | `gofmt -l`; fails if anything is unformatted |
+| `just lint` | `go vet ./...` |
+| `just build` | Build `bin/tsgit` |
+| `just test` | `go test ./...` |
+| `just run [args]` | `go run ./cmd/tsgit` |
 | `just pre-commit` | Hook phase: `fmt lint` |
 | `just pre-push` | Hook phase: `build test` |
 | `just ci` | What CI runs |
@@ -23,8 +27,8 @@ Everything runs through `just`.
 | `just spec-list` | List OpenSpec changes |
 | `just spec-validate` | Validate every spec and change |
 
-The four checks are stubs until the project fills them in. Run `just ci` before
-reporting any task complete. If a check fails, fix the code, not the check.
+Run `just ci` before reporting any task complete. If a check fails, fix the
+code, not the check.
 
 ## Hooks
 
@@ -93,6 +97,17 @@ update this section so the guide stays true.
 
 ## Conventions
 
-TODO as the project acquires them. Keep this list short and push detail into
-`.agents/skills/`: comment discipline, dependency policy, error handling,
-naming, and anything a reviewer has had to say twice.
+- **Identity always comes from Tailscale.** Never parse a client-supplied user
+  name, header, or query parameter to decide who someone is. Resolve the peer
+  through tailscaled's LocalAPI and use that. A field the client controls is
+  not identity.
+- **Authorization is decided before work starts.** Check access, then spawn
+  `git upload-pack` or `git receive-pack`. Never let a subprocess start and hope
+  to interrupt it.
+- **`authz` takes values, not connections.** A decision function receives an
+  identity and a repo and returns allow/deny. If it needs a `net.Conn` or an
+  `http.Request` to do its job, the seam is wrong and it stops being testable
+  without a tailnet.
+- **Shelling out to git is correct, not a shortcut.** See
+  `docs/decisions/0001-git-transport-via-plumbing.md`. Do not begin
+  reimplementing the pack protocol.

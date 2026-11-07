@@ -2,7 +2,22 @@ schema: spec-driven
 
 # Shown to AI when creating artifacts.
 context: |
-  TODO: replace this block when you start the project.
-  Cover the tech stack, what the project is, the real `just` commands, and the
-  conventions an agent must follow. Keep it short — detail belongs in
-  .agents/skills/.
+  tsgit is a git forge built for tailnets. It serves git repositories to peers
+  that Tailscale has already authenticated, over SSH and HTTPS, and derives
+  authorization from tailnet identity — user logins and ACL tags — rather than
+  from its own account system. Go, single binary, runs on one tailnet node.
+
+  Stack: Go 1.27 (stdlib only unless a dependency is justified), no database.
+  Repositories are bare git directories under one root. Transports shell out to
+  `git upload-pack` / `git receive-pack`; the git wire protocol is deliberately
+  not reimplemented.
+
+  Commands: `just ci` (fmt, lint, build, test), `just run`, `just spec-validate`.
+
+  Conventions that matter when specifying: identity always comes from
+  tailscaled's LocalAPI, never from client-supplied input; authorization is
+  decided before any subprocess starts; `internal/authz` takes an identity and
+  a repo, never a connection.
+
+  Out of scope: users outside the tailnet, its own auth, web UI for browsing
+  code, issues/PRs, CI, federation.

@@ -21,3 +21,6 @@ secrets.yml
 .opencode/package.json
 .opencode/package-lock.json
 .opencode/bun.lock
+
+# Build output
+/bin/
