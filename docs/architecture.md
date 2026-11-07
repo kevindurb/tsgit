@@ -28,12 +28,10 @@ Every request arrives from a peer with a known node identity. On the SSH path
 the client authenticates to `tailscaled`'s SSH server or to ours, and the user
 name carries tailnet identity. On the HTTPS path the client source address maps
 to a peer, and `tailscaled`'s LocalAPI `WhoIs` resolves that address to a node,
-a user, its tags, and the app capabilities the tailnet grants that peer for
-this service.
+a user, and its tags.
 
 Authorization is therefore a function of tailnet identity, evaluated per
-request. The permission rules themselves live in the tailnet policy file; the
-forge stores none of its own.
+request:
 
 ```mermaid
 sequenceDiagram
@@ -44,8 +42,8 @@ sequenceDiagram
 
     C->>T: git clone repo
     T->>L: WhoIs(peer address)
-    L-->>T: node, user login, tags, capabilities
-    T->>T: match app capability for repo
+    L-->>T: node, user login, tags
+    T->>T: evaluate ACL rule for repo
     alt allowed
         T->>R: spawn git-upload-pack
         R-->>C: packfile
@@ -63,8 +61,8 @@ when the tailnet changes.
 | Layer | Responsibility | Depends on |
 |---|---|---|
 | `cmd/tsgit` | Flag parsing, config load, listener startup | `internal/*` |
-| `internal/identity` | Resolve a connection to a tailnet identity and its capabilities | tailscaled LocalAPI |
-| `internal/authz` | Decide read/write for an identity on a repo | capabilities carried by the identity |
+| `internal/identity` | Resolve a connection to a tailnet identity | tailscaled LocalAPI |
+| `internal/authz` | Decide read/write/admin for an identity on a repo | the ACL policy |
 | `internal/repos` | Locate, create, and enumerate on-disk repositories | a root directory |
 | `internal/transport` | SSH and HTTPS handlers; exec `git` plumbing | `identity`, `authz`, `repos` |
 
