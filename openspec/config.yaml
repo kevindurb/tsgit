@@ -4,8 +4,11 @@ schema: spec-driven
 context: |
   tsgit is a git forge built for tailnets. It serves git repositories to peers
   that Tailscale has already authenticated, over SSH and HTTPS, and derives
-  authorization from tailnet identity — user logins and ACL tags — rather than
-  from its own account system. Go, single binary, runs on one tailnet node.
+  authorization from tailnet identity — user logins, ACL tags, and the app
+  capabilities granted for the connection — rather than from its own account
+  system. Repo permissions live in the tailnet policy file as app capabilities;
+  tsgit keeps no policy store of its own. Go, single binary, runs on one tailnet
+  node.
 
   Stack: Go 1.27 (stdlib only unless a dependency is justified), no database.
   Repositories are bare git directories under one root. Transports shell out to
