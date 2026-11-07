@@ -25,6 +25,7 @@ import (
 	"github.com/kevindurb/tsgit/internal/identity"
 	"github.com/kevindurb/tsgit/internal/repos"
 	"github.com/kevindurb/tsgit/internal/transport"
+	"github.com/kevindurb/tsgit/internal/web"
 )
 
 // startTailnet is a seam so development mode can be tested without joining a
@@ -121,12 +122,20 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		return err
 	}
 
-	handler := transport.NewHandler(
-		identity.NewLocal(node, logger),
+	resolver := identity.NewLocal(node, logger)
+	gitHandler := transport.NewHandler(
+		resolver,
 		store,
 		&transport.GitBin{Git: store.GitPath(), Log: logger},
 		logger,
 	)
+	ui := web.New(web.Config{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+	})
+	handler := front(gitHandler, ui)
 
 	domains := node.CertDomains()
 	hasHTTPS := node.status.Self != nil && node.status.Self.HasCap(tailcfg.CapabilityHTTPS)

@@ -21,6 +21,8 @@ In scope:
 - Serving git over smart HTTP to tailnet peers from an embedded `tsnet` node.
 - Authorization from tailnet identity, including tag-based machine access.
 - Repository creation, listing, and discovery scoped to the tailnet.
+- A read-only discovery web UI that lists the repositories a viewer may read
+  and shows each repository's clone URL and latest activity.
 - Running as a single binary on one tailnet node, with no host Tailscale
   daemon and no account system.
 
@@ -31,7 +33,10 @@ Out of scope:
 
 - Users outside the tailnet, and public anonymous clone.
 - Its own authentication, password, or key management.
-- A web UI for browsing code, issues, or pull requests.
+- Browsing code (trees, blobs, diffs, or README rendering), issues, or pull
+  requests in the web UI.
+- Creating, renaming, or deleting repositories from the web UI. Those remain
+  the result of an authorized git push.
 - CI/CD. `tsgit` hosts code; it does not test it.
 - Federation or mirroring between tailnets.
 

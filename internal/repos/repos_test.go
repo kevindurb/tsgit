@@ -1,13 +1,17 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestParseName(t *testing.T) {
@@ -244,5 +248,270 @@ func TestDocumentedStorageLayout(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("architecture doc does not mention %q", want)
 		}
+	}
+}
+
+func TestCleanDescription(t *testing.T) {
+	tests := map[string]string{
+		"": "",
+		"Unnamed repository; edit this file 'description' to name the repository.\n": "",
+		"  widget service\n": "widget service",
+	}
+	for in, want := range tests {
+		if got := cleanDescription(in); got != want {
+			t.Errorf("cleanDescription(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestListAndInfo(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	when := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	path, hash := writeCommit(t, store, "acme/widget", "main", "initial commit", when)
+	if err := os.WriteFile(filepath.Join(path, "description"), []byte("widget service\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, metadataGitEnv(t, when), "--git-dir", path, "update-ref", "refs/tags/v1", hash)
+	if _, err := store.Create(context.Background(), "acme/empty"); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	if len(infos) != 2 {
+		t.Fatalf("List returned %d repositories, want 2", len(infos))
+	}
+
+	empty := infos[0]
+	if empty.Name != "acme/empty" || !empty.Empty || empty.Latest.Hash != "" {
+		t.Fatalf("empty info = %+v", empty)
+	}
+
+	widget := infos[1]
+	if widget.Name != "acme/widget" {
+		t.Fatalf("widget name = %q", widget.Name)
+	}
+	if widget.Description != "widget service" {
+		t.Fatalf("description = %q", widget.Description)
+	}
+	if widget.Branch != "main" || widget.Detached || widget.Empty {
+		t.Fatalf("head = %+v", widget)
+	}
+	if widget.Latest.Subject != "initial commit" || widget.Latest.Hash == "" {
+		t.Fatalf("latest = %+v", widget.Latest)
+	}
+	if widget.Branches != 1 || widget.Tags != 1 {
+		t.Fatalf("branches=%d tags=%d, want 1 and 1", widget.Branches, widget.Tags)
+	}
+	if len(widget.Refs) != 2 {
+		t.Fatalf("refs = %v, want a branch and a tag", widget.Refs)
+	}
+	if widget.Err != nil {
+		t.Fatalf("unexpected metadata error: %v", widget.Err)
+	}
+
+	info, err := store.Info(context.Background(), "acme/widget")
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if info.Name != widget.Name || info.Latest.Subject != widget.Latest.Subject {
+		t.Fatalf("Info = %+v, want %+v", info, widget)
+	}
+
+	if _, err := store.Info(context.Background(), "acme/missing"); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("Info missing = %v, want ErrNotExist", err)
+	}
+}
+
+func TestInfoUnbornHeadWithOtherBranch(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	when := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	writeCommit(t, store, "acme/widget", "master", "on master", when)
+
+	info, err := store.Info(context.Background(), "acme/widget")
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if info.Branch != "main" {
+		t.Fatalf("branch = %q, want main", info.Branch)
+	}
+	if !info.Empty {
+		t.Fatal("repository with an unborn default branch is not marked empty")
+	}
+	if info.Branches != 1 || len(info.Refs) != 1 || info.Refs[0] != "master" {
+		t.Fatalf("branches=%d refs=%v, want master", info.Branches, info.Refs)
+	}
+	if info.Latest.Subject != "on master" {
+		t.Fatalf("latest subject = %q", info.Latest.Subject)
+	}
+}
+
+func TestListSkipsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root, "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "acme"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "acme", "evil.git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(context.Background(), "acme/ok"); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Name != "acme/ok" {
+		t.Fatalf("List = %+v, want only acme/ok", infos)
+	}
+}
+
+func TestListDegradesOnBrokenRepo(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root, "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "acme", "broken.git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Name != "acme/broken" {
+		t.Fatalf("List = %+v, want one broken entry", infos)
+	}
+	if infos[0].Err == nil {
+		t.Fatal("broken repository did not report a metadata error")
+	}
+}
+
+func TestInfoHonorsCanceledContext(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	when := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	writeCommit(t, store, "acme/widget", "main", "initial", when)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	info, err := store.Info(ctx, "acme/widget")
+	if err == nil {
+		t.Fatal("Info with a canceled context returned no error")
+	}
+	if info.Name != "acme/widget" {
+		t.Fatalf("Info name = %q, want acme/widget", info.Name)
+	}
+}
+
+func TestInfoNormalizesInvalidUTF8(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	when := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	path, _ := writeCommit(t, store, "acme/widget", "main", "initial", when)
+	if err := os.WriteFile(filepath.Join(path, "description"), []byte("bad\xffdescription"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := store.Info(context.Background(), "acme/widget")
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if !strings.Contains(info.Description, "\uFFFD") {
+		t.Fatalf("description = %q, want a replacement character", info.Description)
+	}
+}
+
+func metadataGitEnv(t *testing.T, when time.Time) []string {
+	t.Helper()
+	home := t.TempDir()
+	stamp := when.Format(time.RFC3339)
+	drop := map[string]bool{
+		"HOME": true, "XDG_CONFIG_HOME": true,
+		"GIT_CONFIG_NOSYSTEM": true, "GIT_TERMINAL_PROMPT": true,
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_INDEX_FILE": true,
+		"GIT_AUTHOR_NAME": true, "GIT_AUTHOR_EMAIL": true, "GIT_AUTHOR_DATE": true,
+		"GIT_COMMITTER_NAME": true, "GIT_COMMITTER_EMAIL": true, "GIT_COMMITTER_DATE": true,
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		key, _, _ := strings.Cut(kv, "=")
+		if !drop[key] {
+			env = append(env, kv)
+		}
+	}
+	return append(env,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+home+"/.config",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_AUTHOR_DATE="+stamp,
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_COMMITTER_DATE="+stamp,
+	)
+}
+
+func writeCommit(t *testing.T, store *Store, name, branch, subject string, when time.Time) (string, string) {
+	t.Helper()
+	path, err := store.Create(context.Background(), name)
+	if err != nil {
+		t.Fatalf("Create %s: %v", name, err)
+	}
+	env := metadataGitEnv(t, when)
+	blob := gitOutput(t, env, "hello\n", "--git-dir", path, "hash-object", "-w", "--stdin")
+	tree := gitOutput(t, env, "100644 blob "+blob+"\tfile.txt\n", "--git-dir", path, "mktree")
+	commit := gitOutput(t, env, "", "--git-dir", path, "commit-tree", tree, "-m", subject)
+	runGit(t, env, "--git-dir", path, "update-ref", "refs/heads/"+branch, commit)
+	return path, commit
+}
+
+func gitOutput(t *testing.T, env []string, input string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func runGit(t *testing.T, env []string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Env = env
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
 }

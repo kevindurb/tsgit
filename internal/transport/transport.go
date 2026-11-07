@@ -169,6 +169,14 @@ func (h *Handler) serveBackend(w http.ResponseWriter, r *http.Request, rt route,
 	sw.commit()
 }
 
+// Matches reports whether r is a request the smart-HTTP handler recognizes.
+// The binary's dispatcher uses it to route git requests here and everything
+// else to the discovery front end without duplicating route parsing.
+func Matches(r *http.Request) bool {
+	_, err := parseRoute(r)
+	return err == nil
+}
+
 func parseRoute(r *http.Request) (route, error) {
 	path := r.URL.Path
 	switch {

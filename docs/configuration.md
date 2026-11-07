@@ -64,4 +64,5 @@ git clone http://127.0.0.1:8080/acme/widget.git
 
 Development mode never contacts a tailnet and never starts tsnet. It serves the
 same handler with a fixed write-capable identity and a temporary repository
-root that is removed on exit. It is not a production fallback.
+root that is removed on exit. The discovery UI is served at `/` on the same
+listener. It is not a production fallback.

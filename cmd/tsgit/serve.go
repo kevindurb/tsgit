@@ -15,6 +15,7 @@ import (
 	"github.com/kevindurb/tsgit/internal/identity"
 	"github.com/kevindurb/tsgit/internal/repos"
 	"github.com/kevindurb/tsgit/internal/transport"
+	"github.com/kevindurb/tsgit/internal/web"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -44,12 +45,20 @@ func serveDev(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		return err
 	}
 
-	handler := transport.NewHandler(
-		identity.Fixed{Identity: identity.Development()},
+	resolver := identity.Fixed{Identity: identity.Development()}
+	gitHandler := transport.NewHandler(
+		resolver,
 		store,
 		&transport.GitBin{Git: store.GitPath(), Log: logger},
 		logger,
 	)
+	ui := web.New(web.Config{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+	})
+	handler := front(gitHandler, ui)
 
 	ln, err := devListen("tcp", cfg.DevListen)
 	if err != nil {
@@ -59,6 +68,19 @@ func serveDev(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	return runHTTP(ctx, srv, ln, logger)
+}
+
+// front routes requests the smart-HTTP handler recognizes to git and every
+// other path to the discovery front end. Dispatch is parse-based so a
+// malformed git request is never served as a repository summary.
+func front(git, ui http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if transport.Matches(r) {
+			git.ServeHTTP(w, r)
+			return
+		}
+		ui.ServeHTTP(w, r)
+	})
 }
 
 func runHTTP(ctx context.Context, srv *http.Server, ln net.Listener, logger *slog.Logger) error {

@@ -15,6 +15,7 @@ flowchart LR
     subgraph tailnet["tailnet (WireGuard)"]
         client["client<br/>git"]
         tagged["tagged CI node"]
+        browser["tailnet peer<br/>browser"]
     end
     tsgit["tsgit binary<br/>embedded tsnet node"]
     state["state dir<br/>node key"]
@@ -22,6 +23,7 @@ flowchart LR
 
     client -- "https://tsgit/acme/widget.git" --> tsgit
     tagged -- "https://tsgit/acme/widget.git" --> tsgit
+    browser -- "https://tsgit/" --> tsgit
     tsgit --> state
     tsgit --> repos
     tsgit -- "WhoIs(peer address)" --> localapi["in-process LocalAPI"]
@@ -72,15 +74,18 @@ or spawn git.
 | `internal/config` | Flags, environment fallbacks, validation, dev root | stdlib, `ipn` |
 | `internal/identity` | Resolve a peer address to an `authz.Identity` | LocalAPI, `tailcfg` |
 | `internal/authz` | Pure read/write/create decision | stdlib only |
-| `internal/repos` | Canonical names, containment, atomic creation | a root directory, `git` |
+| `internal/repos` | Canonical names, containment, metadata reads, atomic creation | a root directory, `git` |
 | `internal/transport` | Smart-HTTP routing and framing, backend seam | `identity`, `authz`, `repos` |
+| `internal/web` | Read-only discovery pages and metadata rendering | `identity`, `authz`, `repos` |
 
-Dependency arrows point one way. `transport` is the only layer that knows about
-a network request; `identity` is the only layer that knows about Tailscale.
+Dependency arrows point one way. `transport` and `web` are the only layers that
+know about a network request; `identity` is the only layer that knows about
+Tailscale.
 
 ## HTTP surface
 
-The handler serves exactly four smart-HTTP endpoints:
+The binary has two HTTP front ends. The git handler serves exactly four
+smart-HTTP endpoints:
 
 | Method | Path | Operation |
 |---|---|---|
@@ -89,7 +94,11 @@ The handler serves exactly four smart-HTTP endpoints:
 | POST | `/<ns>/<repo>.git/git-upload-pack` | read |
 | POST | `/<ns>/<repo>.git/git-receive-pack` | write + create |
 
-Everything else is refused before a backend starts.
+A request the git handler does not recognize is not refused by the system; it is
+routed to the discovery front end, and no git backend starts. Dispatch calls the
+git handler's own route parser, so a malformed smart-HTTP request is not treated
+as a repository summary; it receives the same not-found response as any other
+unknown path.
 
 The request pipeline is: resolve identity, parse the route into name/service/
 operation, decide access, resolve the repository (creating it on an authorized
@@ -106,6 +115,33 @@ Status codes are deliberate:
   byte is written. Once bytes are streaming, a backend failure is logged and the
   response cannot change status.
 - `400` for a malformed gzip request body.
+
+### Discovery surface
+
+The same listeners serve a read-only HTML front end:
+
+| Method | Path | Page |
+|---|---|---|
+| GET | `/` | repository index |
+| GET | `/<ns>/<repo>` | repository summary |
+| GET | `/<ns>/<repo>.git` | redirect to the summary |
+| GET | `/.tsgit/web.css`, `/.tsgit/favicon.svg` | embedded assets |
+
+The index resolves the viewer through the same `WhoIs` path as git, filters the
+repository list with `authz.Decide(id, name, OpRead)`, and marks whether the
+viewer may push. The summary makes the same read decision and returns the same
+`404` for a denied repository and a missing one. A mutating method is `405`; an
+identity lookup failure is a logged `503`.
+
+Metadata comes from `internal/repos`: the `description` file, `HEAD`, and one
+read-only `git for-each-ref` per repository for the latest commit and ref
+counts. Each git call is bounded by a timeout, and one unreadable repository
+degrades to a name-only row instead of failing the page.
+
+Pages are self-contained: `html/template` and `go:embed`, no JavaScript, no
+external assets, and a restrictive content security policy. Light and dark
+rendering follow `prefers-color-scheme`. HTML is served with `no-store` because
+the index is filtered per identity; the CSS and SVG use an `ETag`.
 
 Framing follows git's smart HTTP rules. For v0/v1 reference discovery the
 handler writes the `# service=git-upload-pack` (or `receive-pack`) pkt-line and
@@ -201,6 +237,7 @@ up to ten seconds.
 ## Deferred
 
 SSH transport, Tailscale Funnel, Tailscale Service mode, running against a host
-`tailscaled`, repository listing and browsing, ref-level permissions, and a
-go-git backend are out of scope for this slice. Each is a separate front end,
-trust boundary, or measured replacement decision.
+`tailscaled`, code browsing in the web UI (trees, blobs, diffs, README
+rendering), ref-level permissions, and a go-git backend are out of scope for
+this slice. Each is a separate front end, trust boundary, or measured
+replacement decision.

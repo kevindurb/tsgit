@@ -136,6 +136,37 @@ func TestHSTSHandler(t *testing.T) {
 	}
 }
 
+func TestFrontDispatches(t *testing.T) {
+	git := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "git")
+	})
+	ui := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ui")
+	})
+	handler := front(git, ui)
+
+	tests := []struct {
+		method string
+		target string
+		want   string
+	}{
+		{http.MethodGet, "/acme/widget.git/info/refs?service=git-upload-pack", "git"},
+		{http.MethodPost, "/acme/widget.git/git-upload-pack", "git"},
+		{http.MethodGet, "/", "ui"},
+		{http.MethodGet, "/acme/widget", "ui"},
+		{http.MethodGet, "/.tsgit/web.css", "ui"},
+		{http.MethodGet, "/acme/widget.git/info/refs", "ui"},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tt.method, tt.target, nil)
+		handler.ServeHTTP(rec, req)
+		if got := rec.Body.String(); got != tt.want {
+			t.Errorf("%s %s = %q, want %q", tt.method, tt.target, got, tt.want)
+		}
+	}
+}
+
 func TestGracefulShutdownDrainsInflightRequest(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -244,6 +275,33 @@ func TestDevelopmentModeServesCloneAndPush(t *testing.T) {
 	got, err := os.ReadFile(cloneParent + "/clone/README.md")
 	if err != nil || string(got) != "dev mode\n" {
 		t.Fatalf("clone contents = %q, %v", got, err)
+	}
+
+	for _, tt := range []struct {
+		path string
+		want []string
+	}{
+		{"/", []string{"acme/widget", base + "/acme/widget.git"}},
+		{"/acme/widget", []string{"Default branch", "main", base + "/acme/widget.git"}},
+		{"/.tsgit/web.css", []string{"prefers-color-scheme: dark"}},
+	} {
+		resp, err := http.Get(base + tt.path)
+		if err != nil {
+			cancel()
+			t.Fatalf("GET %s: %v", tt.path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			cancel()
+			t.Fatalf("GET %s = %d", tt.path, resp.StatusCode)
+		}
+		for _, want := range tt.want {
+			if !strings.Contains(string(body), want) {
+				cancel()
+				t.Fatalf("GET %s does not contain %q:\n%s", tt.path, want, body)
+			}
+		}
 	}
 
 	cancel()

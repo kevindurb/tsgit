@@ -8,6 +8,31 @@ import (
 	"github.com/kevindurb/tsgit/internal/authz"
 )
 
+func TestMatches(t *testing.T) {
+	tests := []struct {
+		method string
+		target string
+		want   bool
+	}{
+		{http.MethodGet, "/acme/widget.git/info/refs?service=git-upload-pack", true},
+		{http.MethodGet, "/acme/widget/info/refs?service=git-upload-pack", true},
+		{http.MethodPost, "/acme/widget.git/git-upload-pack", true},
+		{http.MethodPost, "/acme/widget.git/git-receive-pack", true},
+		{http.MethodGet, "/", false},
+		{http.MethodGet, "/acme/widget", false},
+		{http.MethodGet, "/acme/widget.git", false},
+		{http.MethodGet, "/acme/widget.git/info/refs", false},
+		{http.MethodPost, "/acme/widget.git/info/refs?service=git-upload-pack", false},
+		{http.MethodGet, "/.tsgit/web.css", false},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(tt.method, tt.target, nil)
+		if got := Matches(req); got != tt.want {
+			t.Errorf("Matches(%s %s) = %v, want %v", tt.method, tt.target, got, tt.want)
+		}
+	}
+}
+
 func TestParseRoute(t *testing.T) {
 	tests := []struct {
 		name      string

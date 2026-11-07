@@ -1,0 +1,39 @@
+{{define "content"}}
+<div class="page-head">
+  <h1>Repositories</h1>
+  {{if .Repos}}<span class="count">{{len .Repos}} readable</span>{{end}}
+</div>
+
+{{if .Repos}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Repository</th>
+        <th scope="col">Updated</th>
+        <th scope="col">Access</th>
+        <th scope="col">Clone</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Repos}}
+      <tr>
+        <td class="repo-cell">
+          <a class="repo-link" href="{{.Path}}">{{.Name}}</a>
+          {{if .Description}}<div class="repo-desc muted">{{.Description}}</div>{{end}}
+        </td>
+        <td data-label="Updated">{{if .Updated}}{{.Updated}}{{else}}<span class="muted">&mdash;</span>{{end}}</td>
+        <td data-label="Access">{{if .Writable}}<span class="badge badge-write">write</span>{{else}}<span class="badge">read</span>{{end}}</td>
+        <td data-label="Clone"><code class="clone">{{.CloneURL}}</code></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  <h2>No repositories</h2>
+  <p>No repositories you can read exist yet. Create one by pushing to it with git.</p>
+</div>
+{{end}}
+{{end}}

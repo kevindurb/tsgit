@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F7F5F4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1F1E1E" media="(prefers-color-scheme: dark)">
+  <title>{{.Title}} - tsgit</title>
+  <link rel="stylesheet" href="/.tsgit/web.css">
+  <link rel="icon" href="/.tsgit/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/">tsgit</a>
+      <span class="tagline">a git forge for your tailnet</span>
+      {{if .Identity}}<span class="identity" title="tailnet identity">{{.Identity}}</span>{{end}}
+    </div>
+  </header>
+
+  <main class="wrap">
+    {{template "content" .}}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>tsgit {{.Version}}</span>
+      <span>read-only discovery</span>
+    </div>
+  </footer>
+</body>
+</html>

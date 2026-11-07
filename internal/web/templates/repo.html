@@ -1,0 +1,56 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/">Repositories</a><span>/</span>{{.Repo.Name}}</nav>
+
+<div class="page-head">
+  <h1>{{.Repo.Name}}</h1>
+  {{if .Repo.Writable}}<span class="badge badge-write">write</span>{{else}}<span class="badge">read</span>{{end}}
+</div>
+
+{{if .Repo.Description}}<p class="description">{{.Repo.Description}}</p>{{end}}
+
+<div class="clone-block">
+  <div class="label">Clone</div>
+  <code>{{.Repo.CloneURL}}</code>
+</div>
+
+{{if .Repo.MetadataErr}}
+<p class="notice">Some metadata for this repository could not be read.</p>
+{{end}}
+
+{{if .Repo.Empty}}
+  {{if .Repo.Refs}}
+  <div class="notice">
+    <p><code>HEAD</code> points at <code>{{.Repo.Branch}}</code>, which has no commits.</p>
+    <p>Existing refs:
+      {{range $i, $ref := .Repo.Refs}}{{if $i}}, {{end}}<code>{{$ref}}</code>{{end}}
+    </p>
+  </div>
+  {{else}}
+  <div class="empty">
+    <h2>Empty repository</h2>
+    <p>This repository has no commits yet. Push a first one:</p>
+    <pre><code>git init
+git remote add origin {{.Repo.CloneURL}}
+git add .
+git commit -m "Initial commit"
+git push -u origin {{if .Repo.Branch}}{{.Repo.Branch}}{{else}}main{{end}}</code></pre>
+  </div>
+  {{end}}
+{{else}}
+<dl class="meta">
+  <dt>Default branch</dt>
+  <dd>{{if .Repo.Branch}}<code>{{.Repo.Branch}}</code>{{else}}<span class="muted">detached HEAD</span>{{end}}</dd>
+
+  <dt>Latest commit</dt>
+  <dd>
+    {{if .Repo.Latest.Hash}}<code>{{.Repo.Latest.Hash}}</code> {{.Repo.Latest.Subject}}{{if .Repo.Updated}} <span class="muted">{{.Repo.Updated}}</span>{{end}}{{else}}<span class="muted">&mdash;</span>{{end}}
+  </dd>
+
+  <dt>Branches</dt>
+  <dd>{{.Repo.Branches}}</dd>
+
+  <dt>Tags</dt>
+  <dd>{{.Repo.Tags}}</dd>
+</dl>
+{{end}}
+{{end}}

@@ -15,8 +15,9 @@ forge itself is being built.
 
 **Does** serve git repositories over smart HTTP to tailnet peers from an
 embedded tsnet node, authorize reads and writes from tailnet identity and ACL
-tags, and let repos be created and discovered without a separate account
-database. SSH is deferred; smart HTTP already covers clone, fetch, and push.
+tags, let repos be created and discovered without a separate account database,
+and show a read-only repository index with clone URLs in the browser. SSH is
+deferred; smart HTTP already covers clone, fetch, and push.
 
 **Does not** aim to be a GitHub replacement for public open source, run its own
 authentication, serve users outside the tailnet, or become a CI system.
