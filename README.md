@@ -30,6 +30,18 @@ just ci        # fmt, lint, build, test — run before saying anything is done
 just run       # go run ./cmd/tsgit
 ```
 
+## Container image
+
+Images are published to GitHub Container Registry on `main` and on `vX.Y.Z`
+tags:
+
+```sh
+podman pull ghcr.io/kevindurb/tsgit:latest
+```
+
+See [`docs/deployment.md`](docs/deployment.md) for the runtime contract, volume
+and auth-key setup, and the publishing tag rules.
+
 ## Layout
 
 | Path | Holds |
@@ -45,6 +57,7 @@ just run       # go run ./cmd/tsgit
 - [`docs/project.md`](docs/project.md) — purpose, users, scope, non-goals
 - [`docs/architecture.md`](docs/architecture.md) — how the pieces fit
 - [`docs/configuration.md`](docs/configuration.md) — flags and data layout
+- [`docs/deployment.md`](docs/deployment.md) — container image and publishing
 - [`docs/access-control.md`](docs/access-control.md) — the capability contract
 - [`openspec/`](openspec/) — capability specs and in-flight changes
 

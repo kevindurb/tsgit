@@ -1,0 +1,131 @@
+name: Container
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v4
+      - run: just ci
+
+  image:
+    name: Build and publish image
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Register arm64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Verify container tooling
+        run: |
+          podman --version
+          buildah --version
+          test -e /proc/sys/fs/binfmt_misc/qemu-aarch64
+
+      - name: Resolve image reference and tags
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          image="${REPOSITORY,,}"
+          version=""
+          tags=""
+          publish=false
+
+          case "$EVENT_NAME" in
+            pull_request)
+              version="pr-${SHA:0:12}"
+              tags="$version"
+              ;;
+            push)
+              if [[ "$REF" == "refs/heads/main" ]]; then
+                short="${SHA:0:12}"
+                version="sha-${short}"
+                tags="main sha-${short}"
+                publish=true
+              elif [[ "$REF" == refs/tags/v* ]]; then
+                if [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                  version="$REF_NAME"
+                  tags="$REF_NAME latest"
+                  publish=true
+                else
+                  version="pr-${SHA:0:12}"
+                  tags="$version"
+                fi
+              fi
+              ;;
+          esac
+
+          if [[ -z "$tags" ]]; then
+            echo "ref $REF does not produce an image" >&2
+            exit 1
+          fi
+
+          {
+            echo "image=$image"
+            echo "version=$version"
+            echo "publish=$publish"
+            printf 'tags<<EOF\n%s\nEOF\n' "$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        id: build
+        uses: redhat-actions/buildah-build@v3
+        with:
+          image: ${{ steps.meta.outputs.image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          containerfiles: ./Containerfile
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          platforms: ${{ steps.meta.outputs.publish == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+
+      - name: Smoke-test image
+        run: |
+          podman run --rm "${{ steps.build.outputs.image-with-tag }}" version
+          podman run --rm --entrypoint git "${{ steps.build.outputs.image-with-tag }}" --version
+
+      - name: Log in to GHCR
+        if: steps.meta.outputs.publish == 'true'
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        if: steps.meta.outputs.publish == 'true'
+        uses: redhat-actions/push-to-registry@v3
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}

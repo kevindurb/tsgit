@@ -1,0 +1,20 @@
+# Keep the build context to what the Go build actually reads.
+.git
+.githooks
+.github
+.agents
+.opencode
+bin
+docs
+openspec
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.yaml
+secrets.yml
+*.log
+AGENTS.md
+README.md
+REVIEW.md
