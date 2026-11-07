@@ -87,6 +87,66 @@ podman run -d --name tsgit \
   ghcr.io/kevindurb/tsgit:latest serve --http-port 8080
 ```
 
+## Public access over Funnel
+
+Funnel publishes a read-only subset of repositories to the internet. It is off
+by default and needs all of the following:
+
+- MagicDNS and HTTPS certificates enabled for the tailnet.
+- The `funnel` node attribute on the `tsgit` node, and the tailnet's Funnel
+  policy permitting the node.
+- A non-empty `github.com/kevindurb/tsgit/cap/funnel` payload under the node's
+  `nodeAttrs.app`, naming the repositories to publish.
+- A supported Funnel port. `--port` must be `443` (the default), `8443`, or
+  `10000`.
+
+A policy fragment:
+
+```json
+"nodeAttrs": [{
+  "target": ["tag:tsgit"],
+  "attr": ["funnel"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/funnel": [
+      {"repos": ["public/*"]}
+    ]
+  }
+}]
+```
+
+Start the container with the flag or environment variable:
+
+```sh
+podman run -d --name tsgit \
+  -e TS_AUTHKEY \
+  -e TSGIT_FUNNEL=true \
+  -v tsgit-state:/var/lib/tsgit/state \
+  -v tsgit-repos:/var/lib/tsgit/repos \
+  ghcr.io/kevindurb/tsgit:latest
+```
+
+The public clone URL is the node's DNS name plus the ordinary repository path:
+
+```sh
+git clone https://tsgit.example-tailnet.ts.net/public/widget.git
+```
+
+Only `git-upload-pack` and the filtered discovery pages are served publicly.
+Receive-pack, push-to-create, and every mutation return the same not-found
+response as an unreadable repository. The payload has no access level, so public
+write is impossible by contract.
+
+Public requests are bounded: 10s header timeout, 60s read and idle timeouts, a
+1 MiB header ceiling, a 64 MiB request body, and at most
+`--funnel-max-concurrent` (default 4) concurrent pack exchanges. An exhausted
+limit returns `503` with `Retry-After`; a declared body over the limit returns
+`413`. See `docs/configuration.md` for the full table.
+
+If Funnel is requested but a prerequisite is missing or the public listener
+cannot bind, `tsgit` logs an error and keeps serving the tailnet only. Removing
+the `cap/funnel` payload makes the public surface empty on the next request; it
+does not affect the tailnet.
+
 ## Bind mounts and ownership
 
 Named volumes inherit the image directories' ownership. Bind mounts do not.

@@ -17,21 +17,23 @@ import (
 
 // Config is the resolved runtime configuration.
 type Config struct {
-	Hostname      string
-	Port          int
-	HTTPPort      int
-	StateDir      string
-	RepoRoot      string
-	AdvertiseTags string
-	AuthKeyFile   string
-	ControlURL    string
-	HTTPS         bool
-	DefaultBranch string
-	DevListen     string
-	Log           string
-	Verbose       bool
-	DebugTsnet    bool
-	Version       bool
+	Hostname            string
+	Port                int
+	HTTPPort            int
+	StateDir            string
+	RepoRoot            string
+	AdvertiseTags       string
+	AuthKeyFile         string
+	ControlURL          string
+	HTTPS               bool
+	Funnel              bool
+	FunnelMaxConcurrent int
+	DefaultBranch       string
+	DevListen           string
+	Log                 string
+	Verbose             bool
+	DebugTsnet          bool
+	Version             bool
 }
 
 // AdvertiseTagList splits the comma-separated advertise-tags value.
@@ -64,6 +66,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&cfg.AuthKeyFile, "authkey-file", cfg.AuthKeyFile, "file containing a Tailscale auth key")
 	fs.StringVar(&cfg.ControlURL, "control-url", cfg.ControlURL, "coordination server URL")
 	fs.BoolVar(&cfg.HTTPS, "https", cfg.HTTPS, "serve HTTPS when the tailnet permits it")
+	fs.BoolVar(&cfg.Funnel, "funnel", cfg.Funnel, "publish read-only repositories through Tailscale Funnel")
+	fs.IntVar(&cfg.FunnelMaxConcurrent, "funnel-max-concurrent", cfg.FunnelMaxConcurrent, "maximum concurrent public pack exchanges")
 	fs.StringVar(&cfg.DefaultBranch, "default-branch", cfg.DefaultBranch, "initial branch of created repositories")
 	fs.StringVar(&cfg.DevListen, "dev-listen", cfg.DevListen, "localhost address for development mode")
 	fs.StringVar(&cfg.Log, "log", cfg.Log, "log level: debug, info, warn, error")
@@ -101,19 +105,29 @@ func defaults(getenv func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	funnel, err := boolEnv(getenv, "TSGIT_FUNNEL", false)
+	if err != nil {
+		return nil, err
+	}
+	funnelMaxConcurrent, err := intEnv(getenv, "TSGIT_FUNNEL_MAX_CONCURRENT", 4)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
-		Hostname:      envOr(getenv, "tsgit", "TSGIT_HOSTNAME", "TS_HOSTNAME"),
-		Port:          port,
-		HTTPPort:      httpPort,
-		StateDir:      stateDir,
-		RepoRoot:      envOr(getenv, "", "TSGIT_REPO_ROOT"),
-		AdvertiseTags: envOr(getenv, "", "TS_ADVERTISE_TAGS"),
-		AuthKeyFile:   envOr(getenv, "", "TS_AUTHKEY_FILE"),
-		ControlURL:    envOr(getenv, ipn.DefaultControlURL, "TS_CONTROL_URL"),
-		HTTPS:         https,
-		DefaultBranch: envOr(getenv, "main", "TSGIT_DEFAULT_BRANCH"),
-		DevListen:     envOr(getenv, "", "TSGIT_DEV_LISTEN"),
-		Log:           envOr(getenv, "info", "TSGIT_LOG"),
+		Hostname:            envOr(getenv, "tsgit", "TSGIT_HOSTNAME", "TS_HOSTNAME"),
+		Port:                port,
+		HTTPPort:            httpPort,
+		StateDir:            stateDir,
+		RepoRoot:            envOr(getenv, "", "TSGIT_REPO_ROOT"),
+		AdvertiseTags:       envOr(getenv, "", "TS_ADVERTISE_TAGS"),
+		AuthKeyFile:         envOr(getenv, "", "TS_AUTHKEY_FILE"),
+		ControlURL:          envOr(getenv, ipn.DefaultControlURL, "TS_CONTROL_URL"),
+		HTTPS:               https,
+		Funnel:              funnel,
+		FunnelMaxConcurrent: funnelMaxConcurrent,
+		DefaultBranch:       envOr(getenv, "main", "TSGIT_DEFAULT_BRANCH"),
+		DevListen:           envOr(getenv, "", "TSGIT_DEV_LISTEN"),
+		Log:                 envOr(getenv, "info", "TSGIT_LOG"),
 	}, nil
 }
 
@@ -126,6 +140,9 @@ func (c *Config) validate(getenv func(string) string) error {
 	}
 	if c.HTTPPort < 1 || c.HTTPPort > 65535 {
 		return fmt.Errorf("--http-port must be between 1 and 65535, got %d", c.HTTPPort)
+	}
+	if c.FunnelMaxConcurrent < 1 {
+		return fmt.Errorf("--funnel-max-concurrent must be positive, got %d", c.FunnelMaxConcurrent)
 	}
 	if c.Hostname == "" {
 		return errors.New("--hostname must not be empty")

@@ -31,6 +31,12 @@ func TestDefaults(t *testing.T) {
 	if cfg.ControlURL == "" {
 		t.Error("ControlURL must have a default")
 	}
+	if cfg.Funnel {
+		t.Error("Funnel must default to off")
+	}
+	if cfg.FunnelMaxConcurrent != 4 {
+		t.Errorf("FunnelMaxConcurrent = %d, want 4", cfg.FunnelMaxConcurrent)
+	}
 	if !strings.Contains(cfg.StateDir, "tsnet-tsgit") {
 		t.Errorf("StateDir = %q", cfg.StateDir)
 	}
@@ -93,6 +99,52 @@ func TestFlagsWinOverEnvironment(t *testing.T) {
 	}
 	if cfg.Hostname != "flag-host" || cfg.Port != 9443 || cfg.RepoRoot != "/flag/repos" {
 		t.Fatalf("flags did not win: %+v", cfg)
+	}
+}
+
+func TestFunnelConfiguration(t *testing.T) {
+	cfg, err := Parse([]string{"--funnel=false", "--funnel-max-concurrent", "1"}, env(map[string]string{
+		"TSGIT_FUNNEL":                "true",
+		"TSGIT_FUNNEL_MAX_CONCURRENT": "2",
+		"TSGIT_REPO_ROOT":             "/env/repos",
+	}))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Funnel {
+		t.Error("--funnel=false did not win over TSGIT_FUNNEL=true")
+	}
+	if cfg.FunnelMaxConcurrent != 1 {
+		t.Errorf("FunnelMaxConcurrent = %d, want the flag value 1", cfg.FunnelMaxConcurrent)
+	}
+
+	cfg, err = Parse(nil, env(map[string]string{
+		"TSGIT_FUNNEL":                "true",
+		"TSGIT_FUNNEL_MAX_CONCURRENT": "3",
+		"TSGIT_REPO_ROOT":             "/env/repos",
+	}))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !cfg.Funnel || cfg.FunnelMaxConcurrent != 3 {
+		t.Fatalf("environment funnel settings = %v/%d", cfg.Funnel, cfg.FunnelMaxConcurrent)
+	}
+}
+
+func TestInvalidFunnelConcurrency(t *testing.T) {
+	for _, args := range [][]string{
+		{"--repo-root", "/srv/repos", "--funnel-max-concurrent", "0"},
+		{"--repo-root", "/srv/repos", "--funnel-max-concurrent", "-1"},
+	} {
+		if _, err := Parse(args, env(nil)); err == nil || !strings.Contains(err.Error(), "--funnel-max-concurrent") {
+			t.Errorf("Parse(%v) error = %v, want a positive-value error", args, err)
+		}
+	}
+	if _, err := Parse(nil, env(map[string]string{
+		"TSGIT_REPO_ROOT":             "/srv/repos",
+		"TSGIT_FUNNEL_MAX_CONCURRENT": "0",
+	})); err == nil || !strings.Contains(err.Error(), "--funnel-max-concurrent") {
+		t.Errorf("environment zero = %v, want a positive-value error", err)
 	}
 }
 
@@ -182,17 +234,19 @@ func TestDocumentedFlagsAreAccepted(t *testing.T) {
 	flagRE := regexp.MustCompile(`--([a-z][a-z-]*)`)
 	seen := map[string]bool{}
 	values := map[string]string{
-		"port":           "8443",
-		"http-port":      "8080",
-		"https":          "true",
-		"log":            "info",
-		"state-dir":      "/tmp/tsgit-state",
-		"repo-root":      "/tmp/tsgit-repos",
-		"dev-listen":     "127.0.0.1:0",
-		"default-branch": "main",
+		"port":                  "8443",
+		"http-port":             "8080",
+		"https":                 "true",
+		"funnel-max-concurrent": "2",
+		"log":                   "info",
+		"state-dir":             "/tmp/tsgit-state",
+		"repo-root":             "/tmp/tsgit-repos",
+		"dev-listen":            "127.0.0.1:0",
+		"default-branch":        "main",
 	}
 	boolean := map[string]bool{
 		"https":       true,
+		"funnel":      true,
 		"verbose":     true,
 		"debug-tsnet": true,
 		"version":     true,

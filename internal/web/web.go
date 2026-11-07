@@ -33,14 +33,24 @@ type Config struct {
 	Store    RepositoryStore
 	Log      *slog.Logger
 	Version  string
+
+	// Public renders the public Funnel view: no push affordances and no
+	// first-push instructions.
+	Public bool
+
+	// PublicResolver, when set, marks repositories that the public principal
+	// may read in the tailnet index. A nil resolver marks none.
+	PublicResolver identity.Resolver
 }
 
 // Handler serves the index, repository summaries, and embedded assets.
 type Handler struct {
-	resolver identity.Resolver
-	store    RepositoryStore
-	log      *slog.Logger
-	version  string
+	resolver       identity.Resolver
+	publicResolver identity.Resolver
+	store          RepositoryStore
+	log            *slog.Logger
+	version        string
+	public         bool
 
 	indexTmpl *template.Template
 	repoTmpl  *template.Template
@@ -54,13 +64,15 @@ func New(cfg Config) *Handler {
 		log = slog.Default()
 	}
 	return &Handler{
-		resolver:  cfg.Resolver,
-		store:     cfg.Store,
-		log:       log,
-		version:   cfg.Version,
-		indexTmpl: parsePage(indexHTML),
-		repoTmpl:  parsePage(repoHTML),
-		errorTmpl: parsePage(errorHTML),
+		resolver:       cfg.Resolver,
+		publicResolver: cfg.PublicResolver,
+		store:          cfg.Store,
+		log:            log,
+		version:        cfg.Version,
+		public:         cfg.Public,
+		indexTmpl:      parsePage(indexHTML),
+		repoTmpl:       parsePage(repoHTML),
+		errorTmpl:      parsePage(errorHTML),
 	}
 }
 
@@ -133,6 +145,7 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 	}
 
 	views := make([]repoView, 0, len(infos))
+	publicID, hasPublic := h.publicView(r)
 	for _, info := range infos {
 		decision := authz.Decide(id, info.Name, authz.OpRead)
 		if !decision.Allow {
@@ -141,7 +154,11 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 		if info.Err != nil {
 			h.log.Warn("repository metadata unavailable", "repo", info.Name, "error", info.Err)
 		}
-		views = append(views, h.view(r, info, decision.CanCreate))
+		view := h.view(r, info, decision.CanCreate)
+		if hasPublic {
+			view.Public = authz.Decide(publicID, info.Name, authz.OpRead).Allow
+		}
+		views = append(views, view)
 	}
 	sortViews(views)
 
@@ -150,9 +167,24 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 			Title:    "Repositories",
 			Version:  h.version,
 			Identity: identityLabel(id),
+			Public:   h.public,
 		},
 		Repos: views,
 	})
+}
+
+// publicView resolves the public principal for the exposure badge. A failure
+// degrades to no badges; the tailnet page must keep rendering.
+func (h *Handler) publicView(r *http.Request) (authz.Identity, bool) {
+	if h.publicResolver == nil {
+		return authz.Identity{}, false
+	}
+	id, err := h.publicResolver.Resolve(r.Context(), "")
+	if err != nil {
+		h.log.Warn("public visibility unavailable", "error", err)
+		return authz.Identity{}, false
+	}
+	return id, true
 }
 
 func (h *Handler) servePath(w http.ResponseWriter, r *http.Request, id authz.Identity) {
@@ -203,6 +235,7 @@ func (h *Handler) servePath(w http.ResponseWriter, r *http.Request, id authz.Ide
 			Title:    view.Name,
 			Version:  h.version,
 			Identity: identityLabel(id),
+			Public:   h.public,
 		},
 		Repo: view,
 	})
@@ -243,6 +276,7 @@ type pageData struct {
 	Title    string
 	Version  string
 	Identity string
+	Public   bool
 }
 
 type indexPage struct {
@@ -271,6 +305,7 @@ type repoView struct {
 	Branches    int
 	Tags        int
 	Writable    bool
+	Public      bool
 	Empty       bool
 	Refs        []string
 	MetadataErr bool
@@ -295,7 +330,7 @@ func (h *Handler) view(r *http.Request, info repos.Info, writable bool) repoView
 		Updated:     relativeTime(info.Latest.When),
 		Branches:    info.Branches,
 		Tags:        info.Tags,
-		Writable:    writable,
+		Writable:    writable && !h.public,
 		Empty:       info.Empty,
 		Refs:        refs,
 		MetadataErr: info.Err != nil,

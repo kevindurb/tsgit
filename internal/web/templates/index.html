@@ -20,6 +20,7 @@
       <tr>
         <td class="repo-cell">
           <a class="repo-link" href="{{.Path}}">{{.Name}}</a>
+          {{if .Public}}<span class="badge badge-public">public</span>{{end}}
           {{if .Description}}<div class="repo-desc muted">{{.Description}}</div>{{end}}
         </td>
         <td data-label="Updated">{{if .Updated}}{{.Updated}}{{else}}<span class="muted">&mdash;</span>{{end}}</td>
@@ -33,7 +34,7 @@
 {{else}}
 <div class="empty">
   <h2>No repositories</h2>
-  <p>No repositories you can read exist yet. Create one by pushing to it with git.</p>
+  {{if .Public}}<p>No repositories are published here.</p>{{else}}<p>No repositories you can read exist yet. Create one by pushing to it with git.</p>{{end}}
 </div>
 {{end}}
 {{end}}

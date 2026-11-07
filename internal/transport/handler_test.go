@@ -247,6 +247,7 @@ func TestSpoofedHeadersAreIgnored(t *testing.T) {
 	req.RemoteAddr = "100.64.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "203.0.113.9")
 	req.Header.Set("Tailscale-User-Login", "mallory@example.com")
+	req.Header.Set("Tailscale-Funnel-Request", "true")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -366,5 +367,41 @@ func TestNoCacheHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/x-git-receive-pack-result" {
 		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+func TestReadOnlyHandlerRefusesReceivePack(t *testing.T) {
+	backend := &fakeBackend{}
+	handler, store := testHandler(t, writerIdentity(), backend)
+	handler.ReadOnly = true
+
+	for _, target := range []string{
+		"/acme/widget.git/info/refs?service=git-receive-pack",
+	} {
+		rec := request(handler, http.MethodGet, target, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404", target, rec.Code)
+		}
+	}
+	rec := request(handler, http.MethodPost, "/acme/widget.git/git-receive-pack", strings.NewReader("body"))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("receive-pack POST = %d, want 404", rec.Code)
+	}
+	if backend.callCount() != 0 {
+		t.Fatal("read-only handler started the backend for a write")
+	}
+	if store.Exists("acme/widget") {
+		t.Fatal("read-only handler created a repository")
+	}
+
+	if _, err := store.Create(context.Background(), "acme/widget"); err != nil {
+		t.Fatal(err)
+	}
+	rec = request(handler, http.MethodPost, "/acme/widget.git/git-upload-pack", strings.NewReader("body"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload-pack POST = %d, want 200", rec.Code)
+	}
+	if backend.callCount() != 1 {
+		t.Fatalf("backend calls = %d, want 1", backend.callCount())
 	}
 }

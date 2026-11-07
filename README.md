@@ -1,6 +1,6 @@
 # tsgit
 
-A git forge for your tailnet. No accounts, no public listener, no TLS setup.
+A git forge for your tailnet. No accounts, no public write, no TLS setup.
 
 Every peer that reaches tsgit is already authenticated by Tailscale. tsgit uses
 that identity to decide who can read and write, so it never runs its own login
@@ -24,8 +24,9 @@ implemented.
 - Lists the repositories you can read at `https://<hostname>/`.
 - Authorizes from Tailscale identity and ACL tags. There is no user database.
 
-It does not serve users outside the tailnet, run its own authentication, or act
-as a CI system.
+It does not serve users outside the tailnet except read-only Funnel repositories
+that tailnet policy designates, run its own authentication, or act as a CI
+system.
 
 ## Requirements
 

@@ -46,6 +46,11 @@ type Handler struct {
 	Store    *repos.Store
 	Backend  Backend
 	Log      *slog.Logger
+
+	// ReadOnly refuses every route that is not a read. The public Funnel
+	// listener sets it so receive-pack and push-to-create cannot reach a
+	// backend even if a grant were misconfigured.
+	ReadOnly bool
 }
 
 // NewHandler wires a handler.
@@ -76,6 +81,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rt, err := parseRoute(r)
 	if err != nil {
+		h.notFound(w)
+		return
+	}
+	if h.ReadOnly && rt.op != authz.OpRead {
+		h.Log.Info("refused write route on a read-only listener", "repo", rt.name, "service", rt.service)
 		h.notFound(w)
 		return
 	}

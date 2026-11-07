@@ -25,13 +25,17 @@ In scope:
   and shows each repository's clone URL and latest activity.
 - Running as a single binary on one tailnet node, with no host Tailscale
   daemon and no account system.
+- Optional, read-only public clone of a curated subset of repositories over
+  Tailscale Funnel, selected by tailnet policy.
 
 SSH transport is deferred. Smart HTTP carries clone, fetch, and push, so it is
 the first and only transport in the current slice.
 
 Out of scope:
 
-- Users outside the tailnet, and public anonymous clone.
+- Users outside the tailnet, except anonymous read-only clone of repositories
+  explicitly designated by tailnet policy. Public write, public accounts, and
+  control over who may read a public repository remain out of scope.
 - Its own authentication, password, or key management.
 - Browsing code (trees, blobs, diffs, or README rendering), issues, or pull
   requests in the web UI.

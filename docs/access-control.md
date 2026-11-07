@@ -75,6 +75,54 @@ working grant needs both `ip` and `app`:
 
 An `app`-only grant produces a capability nobody can reach.
 
+## Public read capability
+
+Public access has its own node-scoped capability:
+
+```
+github.com/kevindurb/tsgit/cap/funnel
+```
+
+Unlike `cap/repo`, this one is a **node attribute**, not a grant. It belongs
+under `nodeAttrs.app` on the node that runs `tsgit`:
+
+```json
+"nodeAttrs": [{
+  "target": ["tag:tsgit"],
+  "attr": ["funnel"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/funnel": [
+      {"repos": ["public/*", "shared/docs"]}
+    ]
+  }
+}]
+```
+
+The payload is an array of objects containing only `repos` patterns:
+
+<!-- funnel-capability-fixture -->
+```json
+[
+  {"repos": ["public/*", "shared/docs"]}
+]
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `repos` | array of strings | Patterns matched against the canonical name |
+
+There is no `access` field: public access is read-only by construction. An
+unknown field, including an `access` copied from a `cap/repo` grant, makes the
+entry invalid, so the whole payload grants nothing and the error is logged.
+A missing payload means nothing is public. The payload is re-read on every
+public request, so a policy edit takes effect without a restart.
+
+A `cap/funnel` payload under `grants[].app` has **no public effect**. Grant
+capabilities are attached to the source peer's capability map; an anonymous
+Funnel client has no peer and no `WhoIs` response, so there is nothing to
+attach them to. Only the node's own `nodeAttrs.app` is consulted. The `funnel`
+attribute alone only enables the transport; it does not publish anything.
+
 ## Tagged machines
 
 Authorization uses the node's identity, not a user. A machine carrying

@@ -19,6 +19,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/tsnet"
 
 	"github.com/kevindurb/tsgit/internal/config"
@@ -98,12 +99,25 @@ func (t *tailnet) ListenTLS(network, addr string) (net.Listener, error) {
 	return t.server.ListenTLS(network, addr)
 }
 
+// ListenFunnel opens a public listener that accepts Funnel flows only. The
+// tailnet listener keeps its own port registration; tsnet dispatches by flow
+// origin, so a tailnet peer can never arrive here.
+func (t *tailnet) ListenFunnel(network, addr string) (net.Listener, error) {
+	return t.server.ListenFunnel(network, addr, tsnet.FunnelOnly())
+}
+
 func (t *tailnet) CertDomains() []string {
 	return t.server.CertDomains()
 }
 
 func (t *tailnet) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	return t.client.WhoIs(ctx, remoteAddr)
+}
+
+// StatusWithoutPeers reports the node's own capabilities for the public
+// resolver. It is an in-process LocalAPI call and omits the peer list.
+func (t *tailnet) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	return t.client.StatusWithoutPeers(ctx)
 }
 
 func (t *tailnet) Close() error {
@@ -122,28 +136,17 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		return err
 	}
 
-	resolver := identity.NewLocal(node, logger)
-	gitHandler := transport.NewHandler(
-		resolver,
-		store,
-		&transport.GitBin{Git: store.GitPath(), Log: logger},
-		logger,
-	)
-	ui := web.New(web.Config{
-		Resolver: resolver,
-		Store:    store,
-		Log:      logger,
-		Version:  version,
-	})
-	handler := front(gitHandler, ui)
-
 	domains := node.CertDomains()
 	hasHTTPS := node.status.Self != nil && node.status.Self.HasCap(tailcfg.CapabilityHTTPS)
 	if httpsEnabled(cfg.HTTPS, hasHTTPS, domains) {
-		return serveTLS(ctx, cfg, handler, node, domains[0], logger)
+		return serveTLS(ctx, cfg, store, node, domains, logger)
 	}
 	if cfg.HTTPS {
 		logger.Warn("HTTPS unavailable; serving plain HTTP", "cert_domains", len(domains), "capability", hasHTTPS)
+	}
+	if cfg.Funnel {
+		logger.Error("Funnel requested but HTTPS is unavailable; not opening the public listener",
+			"cert_domains", len(domains), "capability", hasHTTPS)
 	}
 
 	ln, err := node.Listen("tcp", ":"+strconv.Itoa(cfg.HTTPPort))
@@ -151,11 +154,61 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		return fmt.Errorf("listen on tailnet:%d: %w", cfg.HTTPPort, err)
 	}
 	logger.Info("serving git smart HTTP over HTTP", "hostname", cfg.Hostname, "port", cfg.HTTPPort)
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{
+		Handler:           newTailnetHandler(store, node, logger, false),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	return runHTTP(ctx, srv, ln, logger)
 }
 
-func serveTLS(ctx context.Context, cfg *config.Config, handler http.Handler, node *tailnet, host string, logger *slog.Logger) error {
+// newTailnetHandler builds the private front end: tailnet identity, write
+// support, and optionally a badge marking repositories that are also public.
+func newTailnetHandler(store *repos.Store, node *tailnet, logger *slog.Logger, markPublic bool) http.Handler {
+	var publicResolver identity.Resolver
+	if markPublic {
+		publicResolver = identity.NewFunnel(node, logger)
+	}
+	return composeTailnet(store, identity.NewLocal(node, logger), publicResolver,
+		&transport.GitBin{Git: store.GitPath(), Log: logger}, logger)
+}
+
+// composeTailnet wires the tailnet resolver into both front ends. The public
+// resolver, when present, is used only for the exposure badge.
+func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolver, backend transport.Backend, logger *slog.Logger) http.Handler {
+	gitHandler := transport.NewHandler(resolver, store, backend, logger)
+	webConfig := web.Config{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+	}
+	webConfig.PublicResolver = publicResolver
+	return front(gitHandler, web.New(webConfig))
+}
+
+// newPublicHandler builds the Funnel front end.
+func newPublicHandler(cfg *config.Config, store *repos.Store, node *tailnet, logger *slog.Logger) http.Handler {
+	backend := &transport.GitBin{Git: store.GitPath(), Log: logger}
+	return composePublic(store, identity.NewFunnel(node, logger), backend, cfg.FunnelMaxConcurrent, logger)
+}
+
+// composePublic wires the public principal into both front ends. It shares the
+// store and templates but refuses every write route before a backend starts.
+func composePublic(store *repos.Store, resolver identity.Resolver, backend transport.Backend, maxConcurrent int, logger *slog.Logger) http.Handler {
+	gitHandler := transport.NewHandler(resolver, store, backend, logger)
+	gitHandler.ReadOnly = true
+	ui := web.New(web.Config{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+		Public:   true,
+	})
+	return publicSurface(front(gitHandler, ui), maxConcurrent, logger)
+}
+
+func serveTLS(ctx context.Context, cfg *config.Config, store *repos.Store, node *tailnet, domains []string, logger *slog.Logger) error {
+	host := domains[0]
 	tlsLn, err := node.ListenTLS("tcp", ":"+strconv.Itoa(cfg.Port))
 	if err != nil {
 		return fmt.Errorf("listen TLS on tailnet:%d: %w", cfg.Port, err)
@@ -175,17 +228,69 @@ func serveTLS(ctx context.Context, cfg *config.Config, handler http.Handler, nod
 		}
 	}()
 
-	logger.Info("serving git smart HTTP over HTTPS", "hostname", host, "port", cfg.Port)
-	srv := &http.Server{
-		Handler:           hstsHandler(handler),
-		ReadHeaderTimeout: 10 * time.Second,
+	publicLn, publicOn := openFunnelListener(cfg, node.status.Self, domains, node.ListenFunnel, logger)
+
+	servers := []serverRun{{
+		srv: &http.Server{
+			Handler:           hstsHandler(newTailnetHandler(store, node, logger, publicOn)),
+			ReadHeaderTimeout: 10 * time.Second,
+		},
+		ln: tlsLn,
+	}}
+	if publicOn {
+		servers = append(servers, serverRun{
+			srv: newPublicServer(newPublicHandler(cfg, store, node, logger)),
+			ln:  publicLn,
+		})
+		logger.Info("serving public read-only git over Funnel", "host", host, "port", cfg.Port)
 	}
-	serveErr := runHTTP(ctx, srv, tlsLn, logger)
+
+	logger.Info("serving git smart HTTP over HTTPS", "hostname", host, "port", cfg.Port)
+	serveErr := runServers(ctx, logger, servers...)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	_ = redirectSrv.Shutdown(shutdownCtx)
 	return serveErr
+}
+
+// funnelBind is the listener seam, so the failure path is testable without a
+// tailnet.
+type funnelBind func(network, addr string) (net.Listener, error)
+
+// openFunnelListener opens the public listener only when --funnel is set and
+// the node has every prerequisite. A failure is logged and returns false; the
+// tailnet keeps serving.
+func openFunnelListener(cfg *config.Config, self *ipnstate.PeerStatus, domains []string, bind funnelBind, logger *slog.Logger) (net.Listener, bool) {
+	if !cfg.Funnel {
+		return nil, false
+	}
+	if reason := funnelUnavailableReason(self, domains); reason != "" {
+		logger.Error("Funnel requested but unavailable; not opening the public listener", "reason", reason)
+		return nil, false
+	}
+	ln, err := bind("tcp", funnelPort(cfg.Port))
+	if err != nil {
+		logger.Error("Funnel listener failed; serving the tailnet only", "port", cfg.Port, "error", err)
+		return nil, false
+	}
+	return ln, true
+}
+
+func funnelUnavailableReason(self *ipnstate.PeerStatus, domains []string) string {
+	if self == nil {
+		return "node status is unavailable"
+	}
+	if !self.HasCap(nodecap.HTTPS) {
+		return "node lacks the https capability"
+	}
+	if !self.HasCap(nodecap.Funnel) {
+		return "node lacks the funnel attribute"
+	}
+	if len(domains) == 0 {
+		return "no HTTPS certificate domain is available"
+	}
+	return ""
 }
 
 func httpsEnabled(explicit, hasCap bool, certDomains []string) bool {

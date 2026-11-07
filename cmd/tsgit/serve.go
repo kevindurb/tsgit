@@ -84,30 +84,52 @@ func front(git, ui http.Handler) http.Handler {
 }
 
 func runHTTP(ctx context.Context, srv *http.Server, ln net.Listener, logger *slog.Logger) error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- srv.Serve(ln)
-	}()
+	return runServers(ctx, logger, serverRun{srv: srv, ln: ln})
+}
 
+// serverRun is one HTTP server bound to a listener.
+type serverRun struct {
+	srv *http.Server
+	ln  net.Listener
+}
+
+// runServers serves every listener, then shuts all of them down together. The
+// first non-shutdown error is returned. In-flight requests drain for up to
+// shutdownTimeout.
+func runServers(ctx context.Context, logger *slog.Logger, servers ...serverRun) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	errCh := make(chan error, len(servers))
+	for _, s := range servers {
+		go func(s serverRun) { errCh <- s.srv.Serve(s.ln) }(s)
+	}
+
+	var runErr error
+	awaiting := len(servers)
 	select {
 	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		awaiting--
+		if !errors.Is(err, http.ErrServerClosed) {
+			runErr = err
 		}
-		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		logger.Info("shutting down", "listen", ln.Addr().String())
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
-		}
-		err := <-errCh
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	for _, s := range servers {
+		logger.Info("shutting down", "listen", s.ln.Addr().String())
+		if err := s.srv.Shutdown(shutdownCtx); err != nil && runErr == nil {
+			runErr = fmt.Errorf("shutdown: %w", err)
+		}
+	}
+	for i := 0; i < awaiting; i++ {
+		if err := <-errCh; !errors.Is(err, http.ErrServerClosed) && runErr == nil {
+			runErr = err
+		}
+	}
+	return runErr
 }
 
 func newLogger(cfg *config.Config, w io.Writer) *slog.Logger {

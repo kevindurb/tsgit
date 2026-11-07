@@ -124,3 +124,49 @@ func TestDocumentedCapabilityFixture(t *testing.T) {
 		t.Fatal("documented grant unexpectedly allows other/widget")
 	}
 }
+
+func TestPublicIdentityIsReadOnly(t *testing.T) {
+	id := PublicIdentity([]FunnelGrant{
+		{Repos: []string{"public/*", "shared/docs"}},
+	})
+	if id.Node != FunnelNode {
+		t.Fatalf("public node = %q, want %q", id.Node, FunnelNode)
+	}
+	for _, repo := range []string{"public/widget", "shared/docs"} {
+		if got := Decide(id, repo, OpRead); !got.Allow {
+			t.Fatalf("public read of %s denied: %+v", repo, got)
+		}
+	}
+	for _, repo := range []string{"public/widget", "shared/docs", "other/secret"} {
+		for _, op := range []Op{OpWrite, OpCreate} {
+			got := Decide(id, repo, op)
+			if got.Allow || got.CanCreate {
+				t.Fatalf("public %s of %s allowed: %+v", op, repo, got)
+			}
+		}
+	}
+}
+
+func TestFunnelGrantRejectsAccessAndUnknownFields(t *testing.T) {
+	for _, payload := range []string{
+		`{"repos":["public/*"],"access":"write"}`,
+		`{"repos":["public/*"],"access":"read"}`,
+		`{"repos":["public/*"],"extra":true}`,
+		`["public/*"]`,
+	} {
+		var g FunnelGrant
+		if err := json.Unmarshal([]byte(payload), &g); err == nil {
+			t.Errorf("FunnelGrant accepted %s: %+v", payload, g)
+		}
+	}
+}
+
+func TestFunnelGrantKeepsOnlyRepos(t *testing.T) {
+	var g FunnelGrant
+	if err := json.Unmarshal([]byte(`{"repos":["public/*","shared/docs"]}`), &g); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(g.Repos) != 2 || g.Repos[0] != "public/*" || g.Repos[1] != "shared/docs" {
+		t.Fatalf("repos = %v", g.Repos)
+	}
+}

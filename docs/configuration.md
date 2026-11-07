@@ -14,6 +14,8 @@ win over the environment. Defaults are shown for the `serve` command.
 | `--authkey-file` | `TS_AUTHKEY_FILE` | empty | File containing a Tailscale auth key |
 | `--control-url` | `TS_CONTROL_URL` | hosted control plane | Coordination server URL |
 | `--https` | `TSGIT_HTTPS` | `true` | Serve TLS when the tailnet permits it |
+| `--funnel` | `TSGIT_FUNNEL` | `false` | Open a read-only public listener through Tailscale Funnel |
+| `--funnel-max-concurrent` | `TSGIT_FUNNEL_MAX_CONCURRENT` | `4` | Maximum concurrent public pack exchanges; must be positive |
 | `--default-branch` | `TSGIT_DEFAULT_BRANCH` | `main` | Initial branch of created repositories |
 | `--dev-listen` | `TSGIT_DEV_LISTEN` | empty | Localhost address for development mode |
 | `--log` | `TSGIT_LOG` | `info` | `debug`, `info`, `warn`, or `error` |
@@ -54,6 +56,39 @@ capability, and the tailnet returns at least one certificate domain. Otherwise
 the daemon serves plain HTTP on `--http-port` and logs that HTTPS is
 unavailable. WireGuard already encrypts tailnet traffic; TLS provides a trusted
 hostname and normal client ergonomics.
+
+## Public listener (Funnel)
+
+`--funnel` is off by default. It opens a second, public listener through
+Tailscale Funnel serving only clone/fetch and the filtered discovery pages.
+Three independent keys are required before anything is published: `--funnel`,
+the tailnet `funnel` node attribute, and a non-empty `cap/funnel` payload under
+the node's `nodeAttrs.app`. None of them alone exposes a repository. The payload
+contract is in `docs/access-control.md`.
+
+Funnel needs HTTPS certificate domains, so it is opened only when the node has
+the `https` and `funnel` capabilities and a certificate domain. If any
+prerequisite is missing, or the public listener cannot bind, `tsgit` logs an
+error and keeps serving the tailnet; the public listener is not opened.
+
+The public server is deliberately stricter than the tailnet server:
+
+| Control | Value | Reason |
+|---|---|---|
+| `ReadHeaderTimeout` | `10s` | bounds slow header writes |
+| `ReadTimeout` | `60s` | bounds request-body reads |
+| `IdleTimeout` | `60s` | bounds idle keep-alive |
+| `WriteTimeout` | none | large clones are legitimate |
+| `MaxHeaderBytes` | `1 MiB` | cheap header ceiling |
+| request body | `64 MiB` | fetch negotiation is small |
+| concurrent pack POSTs | `--funnel-max-concurrent` (`4`) | CPU, disk, and Funnel bandwidth |
+
+A declared `Content-Length` over the body limit is refused with `413` before a
+backend starts. A chunked body is bounded by the same limit while it is read. A
+public `POST .../git-upload-pack` that finds every slot busy is refused with
+`503` and `Retry-After`; it is never queued. The public client's source address
+comes from `FunnelConn.Src` and is logged with the `funnel` principal; it is
+never used for authorization.
 
 ## Development mode
 

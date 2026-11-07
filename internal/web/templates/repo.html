@@ -28,12 +28,16 @@
   {{else}}
   <div class="empty">
     <h2>Empty repository</h2>
+    {{if .Public}}
+    <p>This repository has no commits yet.</p>
+    {{else}}
     <p>This repository has no commits yet. Push a first one:</p>
     <pre><code>git init
 git remote add origin {{.Repo.CloneURL}}
 git add .
 git commit -m "Initial commit"
 git push -u origin {{if .Repo.Branch}}{{.Repo.Branch}}{{else}}main{{end}}</code></pre>
+    {{end}}
   </div>
   {{end}}
 {{else}}

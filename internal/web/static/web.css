@@ -269,6 +269,12 @@ tbody tr:hover {
   color: var(--accent-text);
 }
 
+.badge-public {
+  border-color: var(--accent-fill);
+  color: var(--accent-text);
+  margin-left: 6px;
+}
+
 .clone-block {
   margin-bottom: 24px;
   padding: 14px 16px;

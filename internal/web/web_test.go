@@ -404,3 +404,116 @@ func TestNotFoundPaths(t *testing.T) {
 		}
 	}
 }
+
+func publicIdentity() authz.Identity {
+	return authz.PublicIdentity([]authz.FunnelGrant{{Repos: []string{"public/*"}}})
+}
+
+func newPublicTestHandler(t *testing.T, store RepositoryStore) *Handler {
+	t.Helper()
+	return New(Config{
+		Resolver: fakeResolver{id: publicIdentity()},
+		Store:    store,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version:  "test",
+		Public:   true,
+	})
+}
+
+func TestPublicIndexIsFilteredAndReadOnly(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{
+		{Name: "public/widget", Description: "published"},
+		{Name: "other/secret", Description: "private"},
+	}}
+	body := request(newPublicTestHandler(t, store), http.MethodGet, "/").Body.String()
+
+	if !strings.Contains(body, "public/widget") {
+		t.Error("public index does not list the public repository")
+	}
+	if strings.Contains(body, "other/secret") {
+		t.Error("public index listed a non-public repository")
+	}
+	if strings.Contains(body, "badge-write") {
+		t.Error("public index has a writable indicator")
+	}
+	if strings.Contains(body, "pushing to it") {
+		t.Error("public index tells the viewer to push")
+	}
+}
+
+func TestPublicEmptyRepositoryHidesPushInstructions(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{
+		Name:   "public/empty",
+		Branch: "main",
+		Empty:  true,
+	}}}
+	body := request(newPublicTestHandler(t, store), http.MethodGet, "/public/empty").Body.String()
+
+	if !strings.Contains(body, "no commits") && !strings.Contains(body, "Empty repository") {
+		t.Fatalf("public empty summary does not identify the empty state: %q", body)
+	}
+	for _, unwanted := range []string{"git push", "git remote add origin", "Initial commit"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("public empty summary contains first-push instruction %q", unwanted)
+		}
+	}
+}
+
+func TestTailnetIndexMarksPublicRepositories(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{
+		{Name: "public/widget"},
+		{Name: "other/secret"},
+	}}
+	handler := New(Config{
+		Resolver:       fakeResolver{id: writerIdentity()},
+		PublicResolver: fakeResolver{id: publicIdentity()},
+		Store:          store,
+		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	body := request(handler, http.MethodGet, "/").Body.String()
+
+	if got := strings.Count(body, "badge-public"); got != 1 {
+		t.Fatalf("public badge count = %d, want 1\n%s", got, body)
+	}
+	if !strings.Contains(body, "other/secret") {
+		t.Fatal("tailnet index no longer lists a non-public readable repository")
+	}
+}
+
+func TestTailnetIndexSurvivesPublicLookupFailure(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	handler := New(Config{
+		Resolver:       fakeResolver{id: readerIdentity()},
+		PublicResolver: fakeResolver{err: errors.New("status down")},
+		Store:          store,
+		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	rec := request(handler, http.MethodGet, "/")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "acme/widget") {
+		t.Fatalf("tailnet index failed after a public lookup error: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "badge-public") {
+		t.Error("a failed public lookup marked a repository public")
+	}
+}
+
+func TestPublicSummaryDeniedAndMissingAreIdentical(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{
+		{Name: "public/widget"},
+		{Name: "other/secret"},
+	}}
+	handler := newPublicTestHandler(t, store)
+
+	visible := request(handler, http.MethodGet, "/public/widget")
+	if visible.Code != http.StatusOK {
+		t.Fatalf("public summary = %d, want 200", visible.Code)
+	}
+	denied := request(handler, http.MethodGet, "/other/secret")
+	missing := request(handler, http.MethodGet, "/other/missing")
+	if denied.Code != http.StatusNotFound || missing.Code != http.StatusNotFound {
+		t.Fatalf("statuses = %d/%d, want 404/404", denied.Code, missing.Code)
+	}
+	if denied.Body.String() != missing.Body.String() {
+		t.Fatal("public non-public and missing summaries differ")
+	}
+}

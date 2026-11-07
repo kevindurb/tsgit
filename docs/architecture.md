@@ -8,7 +8,9 @@ smart HTTP. There is no host Tailscale dependency, no root, no separate TLS
 termination, and no account database.
 
 This slice serves HTTP only. SSH is deferred to a later front end; smart HTTP
-already carries clone, fetch, and push.
+already carries clone, fetch, and push. A Funnel front end is an optional,
+read-only add-on: it is off unless the deployment opts in, and it never replaces
+the tailnet listener.
 
 ```mermaid
 flowchart LR
@@ -17,6 +19,7 @@ flowchart LR
         tagged["tagged CI node"]
         browser["tailnet peer<br/>browser"]
     end
+    public["public client<br/>(anonymous)"]
     tsgit["tsgit binary<br/>embedded tsnet node"]
     state["state dir<br/>node key"]
     repos["repo root<br/>bare git dirs"]
@@ -24,9 +27,11 @@ flowchart LR
     client -- "https://tsgit/acme/widget.git" --> tsgit
     tagged -- "https://tsgit/acme/widget.git" --> tsgit
     browser -- "https://tsgit/" --> tsgit
+    public -- "https://tsgit/public/widget.git" --> tsgit
     tsgit --> state
     tsgit --> repos
     tsgit -- "WhoIs(peer address)" --> localapi["in-process LocalAPI"]
+    tsgit -- "StatusWithoutPeers" --> localapi
 ```
 
 ## Identity comes from the embedded node, never from the client
@@ -72,7 +77,7 @@ or spawn git.
 |---|---|---|
 | `cmd/tsgit` | Commands, config load, tsnet node, listeners, shutdown | `internal/*` |
 | `internal/config` | Flags, environment fallbacks, validation, dev root | stdlib, `ipn` |
-| `internal/identity` | Resolve a peer address to an `authz.Identity` | LocalAPI, `tailcfg` |
+| `internal/identity` | Resolve a peer address, or the public node capability, to an `authz.Identity` | LocalAPI, `tailcfg` |
 | `internal/authz` | Pure read/write/create decision | stdlib only |
 | `internal/repos` | Canonical names, containment, metadata reads, atomic creation | a root directory, `git` |
 | `internal/transport` | Smart-HTTP routing and framing, backend seam | `identity`, `authz`, `repos` |
@@ -152,6 +157,41 @@ falls back. Content types are
 `application/x-git-<service>-result`, with no-cache headers. Request bodies are
 streamed, gzip request bodies are inflated, and responses are flushed as the
 backend writes rather than buffered.
+
+### Public front end (Funnel)
+
+With `--funnel`, the daemon opens a second listener with
+`tsnet.Server.ListenFunnel(":443", tsnet.FunnelOnly())` alongside the tailnet TLS
+listener. tsnet dispatches by flow origin, so this is a trust boundary rather
+than a runtime classification: the tailnet handler never sees a public
+connection, and the public handler never sees a tailnet peer. The same port is
+allowed because the Funnel listener is registered as Funnel-only. Funnel accepts
+ports 443, 8443, and 10000; `--port` must therefore be one of them.
+
+The Funnel listener must be opted into three times: `--funnel`, the tailnet
+`funnel` node attribute, and a non-empty `github.com/kevindurb/tsgit/cap/funnel`
+payload under `nodeAttrs.app`. If a prerequisite is missing or the listener
+cannot bind, the daemon logs an error and keeps serving only the tailnet.
+
+The public handler is a separate composition:
+
+| Concern | Tailnet path | Public path |
+|---|---|---|
+| Identity | `WhoIs(r.RemoteAddr)` | node `cap/funnel` via `StatusWithoutPeers` |
+| Principal | peer node, login, tags, grants | synthetic `funnel`, read-only grants |
+| Services | upload-pack, receive-pack | upload-pack only |
+| Discovery | viewer's authorized view | public subset, no write affordances |
+| Limits | header timeout | header/read/idle timeouts, 1 MiB headers, 64 MiB bodies, 4 concurrent packs |
+
+Public requests never call `WhoIs`. The client address is taken from
+`FunnelConn.Src` for access logs only; `Conn.RemoteAddr` is the Funnel relay and
+is never used for authorization. A failed status lookup is refused with a logged
+`503`.
+
+Both HTTP servers run under one shutdown path. `runServers` starts each server,
+then on cancellation or the first failure shuts all of them down and waits for
+in-flight requests, for up to ten seconds. The tailnet server is unaffected by a
+public listener failure, and a public request in flight is allowed to drain.
 
 ### Replaceable backend
 
@@ -236,8 +276,8 @@ up to ten seconds.
 
 ## Deferred
 
-SSH transport, Tailscale Funnel, Tailscale Service mode, running against a host
-`tailscaled`, code browsing in the web UI (trees, blobs, diffs, README
-rendering), ref-level permissions, and a go-git backend are out of scope for
-this slice. Each is a separate front end, trust boundary, or measured
-replacement decision.
+SSH transport, running against a host `tailscaled`, Tailscale Service mode, code
+browsing in the web UI (trees, blobs, diffs, README rendering), ref-level
+permissions, public write or public accounts, audience control over public
+repositories, and a go-git backend are out of scope for this slice. Each is a
+separate front end, trust boundary, or measured replacement decision.
