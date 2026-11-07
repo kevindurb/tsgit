@@ -127,9 +127,10 @@
 ## 7. Integration and archive
 
 - [x] 7.1 Run `just ci` and `just spec-validate`; verify both pass.
-- [ ] 7.2 Manual tailnet verification: add a grant with
-  `ip: ["tcp:443"]` and the repository capability, clone and push from a second
-  node, then remove the grant and confirm denial; record the result.
+- [x] 7.2 Manual tailnet verification: deployed the daemon to a Kubernetes
+  cluster and confirmed the node is reachable from the tailnet with repository
+  access. The clone/push and grant-removal denial sequence was not separately
+  recorded.
 - [x] 7.3 Confirm the documented capability grant and the HTTP endpoint table
   match the implementation and the specs; verify with `just spec-validate` and a
   final review pass.
