@@ -22,7 +22,7 @@ backend, and another front end MAY serve it under its own authorization.
 - **WHEN** a client with write access pushes to an existing repository
 - **THEN** the push succeeds and the refs are updated on disk
 
-#### Scenario: Unsupported smart-HTTP request is refused
+#### Scenario: Unsupported request is refused
 
 - **WHEN** a client sends a smart-HTTP method, service, or path that the git
   handler does not recognize
