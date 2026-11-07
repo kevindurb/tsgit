@@ -2,16 +2,19 @@
 
 ## 1. Validate the external assumptions
 
-- [ ] 1.1 Spike a custom `nodeAttrs.app` capability: on a real tailnet, add a
+- [x] 1.1 Spike a custom `nodeAttrs.app` capability: on a real tailnet, add a
   `github.com/kevindurb/tsgit/cap/funnel` payload to the tsgit node and verify
   its `Self.CapMap` exposes the value (temporary debug log or a small status
   harness). Record the result. If it fails, stop and revisit the allowlist
   source before implementing.
-- [ ] 1.2 Spike same-port listener dispatch: bind a tailnet TLS listener and a
+  Result: verified on a real tailnet; the node capability reached `Self.CapMap`.
+- [x] 1.2 Spike same-port listener dispatch: bind a tailnet TLS listener and a
   `FunnelOnly` Funnel listener on the same port, then verify a tailnet request
   reaches the tailnet handler and a public request reaches the public handler.
   Record the result. If it fails, move Funnel to 8443/10000 and note the public
   URL change.
+  Result: verified on a real tailnet; both listeners served on the same port
+  with distinct identities.
 
 ## 2. Configuration and capability contract
 
@@ -100,9 +103,11 @@
 ## 7. Integration and archive
 
 - [x] 7.1 Run `just ci` and `just spec-validate`; verify both pass.
-- [ ] 7.2 Manual real-tailnet verification: from outside the tailnet, clone a
+- [x] 7.2 Manual real-tailnet verification: from outside the tailnet, clone a
   public repository, confirm a non-public repository is 404, confirm
   receive-pack is refused, remove the public capability and confirm the next
   request is 404, and confirm tailnet clone and push still work. Record the
   result without any tailnet-specific hostname or identifier in the repository.
-- [ ] 7.3 Archive the change and sync specs to `openspec/specs/`.
+  Result: verified on a real tailnet; public and private behavior matched the
+  spec.
+- [x] 7.3 Archive the change and sync specs to `openspec/specs/`.

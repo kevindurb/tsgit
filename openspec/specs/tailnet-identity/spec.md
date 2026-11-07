@@ -7,10 +7,13 @@ Resolve every inbound HTTP request to the tailnet identity and app capabilities 
 
 ### Requirement: Request identity resolution
 
-The system MUST resolve each accepted request to a tailnet identity consisting
-of the peer node, an optional user login, the node's ACL tags, and the app
-capabilities granted for this service, before making any authorization decision
-or starting any backend work.
+The system MUST resolve every request that is not a Funnel request to a tailnet
+identity consisting of the peer node, an optional user login, the node's ACL
+tags, and the app capabilities granted for this service, before making any
+authorization decision or starting any backend work. A request that arrives
+over Funnel MUST NOT be resolved this way: it MUST use the public read-only
+principal defined by `funnel-access`, and the system MUST NOT call `WhoIs` for
+it.
 
 #### Scenario: Known peer with capabilities
 
@@ -21,15 +24,23 @@ or starting any backend work.
 
 #### Scenario: Unknown peer
 
-- **WHEN** a request arrives from an address that does not resolve to a known
-  tailnet peer
+- **WHEN** a non-Funnel request arrives from an address that does not resolve to
+  a known tailnet peer
 - **THEN** the system refuses the request without starting a backend or
   creating a repository
+
+#### Scenario: Funnel request uses the public principal
+
+- **WHEN** a request arrives over Funnel
+- **THEN** it resolves to the public read-only principal and no tailnet identity
+  lookup is attempted
 
 ### Requirement: Client-supplied identity is never trusted
 
 The system MUST NOT derive identity or capabilities from an HTTP header, query
-parameter, request body, or any other value the client controls.
+parameter, request body, or any other value the client controls. This includes
+values that claim a Funnel origin: a header, query parameter, or body value MUST
+NOT select the public path or change which principal is used.
 
 #### Scenario: Spoofed headers are ignored
 
@@ -37,6 +48,13 @@ parameter, request body, or any other value the client controls.
   claimed user name while the peer address maps to a different identity
 - **THEN** authorization uses the identity resolved from the peer address and
   the claimed values have no effect
+
+#### Scenario: Funnel origin cannot be claimed
+
+- **WHEN** a tailnet client sends `Tailscale-Funnel-Request` or any other value
+  claiming to be public
+- **THEN** it is still resolved as the tailnet peer and its capabilities still
+  apply
 
 ### Requirement: Tagged nodes are identified without a user login
 
@@ -54,14 +72,22 @@ authorization.
 ### Requirement: Capabilities are part of the resolved identity
 
 The system MUST include the repository capability values from the same identity
-response in the resolved identity, and MUST treat a missing capability as an
-empty set rather than an error.
+response in a tailnet identity, and MUST treat a missing capability as an empty
+set rather than an error. The public principal's read grants come from the
+node's `cap/funnel` capability defined by `funnel-access`; they MUST NOT be
+taken from a `WhoIs` response.
 
 #### Scenario: Peer without a repository capability
 
 - **WHEN** a known peer has no repository capability for this service
 - **THEN** the identity resolves successfully with an empty capability set and
   later authorization denies access
+
+#### Scenario: Public grants come from the node capability
+
+- **WHEN** a Funnel request is authorized
+- **THEN** its read grants come from the node's own `cap/funnel` payload, not
+  from a tailnet identity response
 
 ### Requirement: Identity resolution failure is explicit
 
