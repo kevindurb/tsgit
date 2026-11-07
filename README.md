@@ -1,71 +1,156 @@
 # tsgit
 
-A git forge that treats Tailscale as its network, not an afterthought.
+A git forge for your tailnet. No accounts, no public listener, no TLS setup.
 
-Existing forges assume a public listener, an account system, and a PKI of their
-own. `tsgit` assumes none of that: every human and machine that reaches it is
-already identified by the tailnet, already authenticated by WireGuard, and
-already reachable by MagicDNS. Identity, transport, and reachability are three
-things a forge normally has to build. On a tailnet, they are given.
+Every peer that reaches tsgit is already authenticated by Tailscale. tsgit uses
+that identity to decide who can read and write, so it never runs its own login
+system.
 
-Status: early. The scaffolding, the contract, and the specs are in place; the
-forge itself is being built.
+## Built with AI
 
-## What it does and does not do
+tsgit is built with AI. Coding agents write most of the code, tests, and docs
+under human direction, and a human reviews every change.
 
-**Does** serve git repositories over smart HTTP to tailnet peers from an
-embedded tsnet node, authorize reads and writes from tailnet identity and ACL
-tags, let repos be created and discovered without a separate account database,
-and show a read-only repository index with clone URLs in the browser. SSH is
-deferred; smart HTTP already covers clone, fetch, and push.
+## Status
 
-**Does not** aim to be a GitHub replacement for public open source, run its own
-authentication, serve users outside the tailnet, or become a CI system.
+Early, but usable. tsgit serves git over smart HTTP and shows a read-only
+repository index. SSH, code browsing, issues, pull requests, and CI are not
+implemented.
 
-## Commands
+## What it does
 
-Everything runs through `just`. See `AGENTS.md` for the full contract.
+- Serves `git clone`, `fetch`, and `push` over smart HTTP to tailnet peers.
+- Creates a repository on an authorized first push.
+- Lists the repositories you can read at `https://<hostname>/`.
+- Authorizes from Tailscale identity and ACL tags. There is no user database.
 
+It does not serve users outside the tailnet, run its own authentication, or act
+as a CI system.
+
+## Requirements
+
+1. A tailnet.
+2. A Tailscale auth key, or an existing registered node state.
+3. A tailnet policy grant that gives peers the tsgit repository capability.
+
+The grant needs both `ip` and `app`:
+
+```json
+"grants": [{
+  "src": ["group:devs", "tag:ci"],
+  "dst": ["tag:tsgit"],
+  "ip": ["tcp:443"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/repo": [
+      {"repos": ["acme/*"], "access": "write"},
+      {"repos": ["shared/docs"], "access": "read"}
+    ]
+  }
+}]
 ```
-just ci        # fmt, lint, build, test — run before saying anything is done
-just run       # go run ./cmd/tsgit
-```
 
-## Container image
+Without a matching grant, every request returns `404`. That is deliberate: the
+server does not reveal whether a repository exists to someone who cannot read
+it. See [`docs/access-control.md`](docs/access-control.md) for the full payload.
 
-Images are published to GitHub Container Registry on `main` and on `vX.Y.Z`
-tags:
+## Deploy
+
+The image is published to GitHub Container Registry.
 
 ```sh
-podman pull ghcr.io/kevindurb/tsgit:latest
+podman volume create tsgit-state
+podman volume create tsgit-repos
+
+export TS_AUTHKEY=tskey-auth-...
+
+podman run -d --name tsgit \
+  --restart=unless-stopped \
+  -e TS_AUTHKEY \
+  -e TSGIT_HOSTNAME=tsgit \
+  -e TS_ADVERTISE_TAGS=tag:tsgit \
+  -v tsgit-state:/var/lib/tsgit/state \
+  -v tsgit-repos:/var/lib/tsgit/repos \
+  ghcr.io/kevindurb/tsgit:main
 ```
 
-See [`docs/deployment.md`](docs/deployment.md) for the runtime contract, volume
-and auth-key setup, and the publishing tag rules.
+The example advertises `tag:tsgit`, so the auth key must be allowed to apply
+that tag. Use the same tag in the policy grant above.
+
+`:main` tracks the latest merge. For a deployment that should not change
+underneath you, pin a release tag such as
+`ghcr.io/kevindurb/tsgit:v1.2.3`. `latest` moves only when a release tag is
+published.
+
+The state volume holds the node key, so the auth key is only needed for the
+first registration. The repository volume holds the bare git directories. Back
+up the repository volume; keep it separate from the state volume. For bind
+mounts, auth-key files, upgrades, and arm64, see
+[`docs/deployment.md`](docs/deployment.md).
+
+## Use it
+
+Open the index at `https://tsgit/` (MagicDNS). It lists the repositories you may
+read and marks whether you may push. To clone:
+
+```sh
+git clone https://tsgit/acme/widget.git
+```
+
+To create a repository, push to it. A user or tagged node with `write` access
+creates it on the first push:
+
+```sh
+git remote add origin https://tsgit/acme/widget.git
+git push -u origin main
+```
+
+If HTTPS is unavailable, the node serves plain HTTP on port 80, so use
+`http://tsgit/`. WireGuard still encrypts the traffic.
+
+## Local development
+
+Development mode needs no tailnet and no auth key. It uses a temporary
+repository root and a fixed write-capable identity:
+
+```sh
+just run serve --dev-listen 127.0.0.1:8080
+```
+
+Then open `http://127.0.0.1:8080/` or clone:
+
+```sh
+git clone http://127.0.0.1:8080/acme/widget.git
+```
+
+This mode is not a production fallback.
+
+## Documentation
+
+- [`docs/project.md`](docs/project.md) — purpose, users, scope, non-goals
+- [`docs/architecture.md`](docs/architecture.md) — how the pieces fit
+- [`docs/configuration.md`](docs/configuration.md) — flags and environment variables
+- [`docs/deployment.md`](docs/deployment.md) — container details and publishing
+- [`docs/access-control.md`](docs/access-control.md) — the capability contract
 
 ## Layout
 
 | Path | Holds |
 |---|---|
 | `cmd/tsgit/` | The binary's entry point |
-| `internal/` | Implementation, package per concern |
+| `internal/` | Implementation, one package per concern |
 | `docs/` | Project and architecture documentation |
 | `openspec/` | Specs and change artifacts |
 | `.agents/skills/` | Durable agent conventions |
 
-## Documentation
+## Contributing
 
-- [`docs/project.md`](docs/project.md) — purpose, users, scope, non-goals
-- [`docs/architecture.md`](docs/architecture.md) — how the pieces fit
-- [`docs/configuration.md`](docs/configuration.md) — flags and data layout
-- [`docs/deployment.md`](docs/deployment.md) — container image and publishing
-- [`docs/access-control.md`](docs/access-control.md) — the capability contract
-- [`openspec/`](openspec/) — capability specs and in-flight changes
+Requires Go, `just`, and `git`.
 
-## Getting started
-
-```
-git clone git@github.com:kevindurb/tsgit.git && cd tsgit
+```sh
+git clone git@github.com:kevindurb/tsgit.git
+cd tsgit
 just install-hooks   # once per clone
 just ci
 ```
+
+`just` lists the rest. `AGENTS.md` explains the workflow and conventions.
