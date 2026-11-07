@@ -13,9 +13,10 @@ forge itself is being built.
 
 ## What it does and does not do
 
-**Does** serve git repositories over SSH and HTTPS to tailnet peers, authorize
-reads and writes from tailnet identity and ACL tags, and let repos be created
-and discovered without a separate account database.
+**Does** serve git repositories over smart HTTP to tailnet peers from an
+embedded tsnet node, authorize reads and writes from tailnet identity and ACL
+tags, and let repos be created and discovered without a separate account
+database. SSH is deferred; smart HTTP already covers clone, fetch, and push.
 
 **Does not** aim to be a GitHub replacement for public open source, run its own
 authentication, serve users outside the tailnet, or become a CI system.
@@ -43,6 +44,8 @@ just run       # go run ./cmd/tsgit
 
 - [`docs/project.md`](docs/project.md) — purpose, users, scope, non-goals
 - [`docs/architecture.md`](docs/architecture.md) — how the pieces fit
+- [`docs/configuration.md`](docs/configuration.md) — flags and data layout
+- [`docs/access-control.md`](docs/access-control.md) — the capability contract
 - [`openspec/`](openspec/) — capability specs and in-flight changes
 
 ## Getting started

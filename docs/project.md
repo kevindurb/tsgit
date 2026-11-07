@@ -18,10 +18,14 @@ who already uses Tailscale SSH and would rather `git clone` the same way.
 
 In scope:
 
-- Serving git over SSH to tailnet peers.
+- Serving git over smart HTTP to tailnet peers from an embedded `tsnet` node.
 - Authorization from tailnet identity, including tag-based machine access.
 - Repository creation, listing, and discovery scoped to the tailnet.
-- Running as a single binary on one tailnet node.
+- Running as a single binary on one tailnet node, with no host Tailscale
+  daemon and no account system.
+
+SSH transport is deferred. Smart HTTP carries clone, fetch, and push, so it is
+the first and only transport in the current slice.
 
 Out of scope:
 
