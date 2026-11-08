@@ -63,9 +63,10 @@ an operation. It returns a decision. It does not import `net/http`, tsnet, or a
 connection type, so it is tested without a tailnet.
 
 The capability is `github.com/kevindurb/tsgit/cap/repo`. Grants union, the
-highest level wins, `write` implies `read`, `write` also authorizes creation,
-and no matching pattern denies. The full payload contract is in
-`docs/access-control.md`.
+highest level wins, `write` implies `read`, `write` authorizes creation, and
+`admin` implies `write` and authorizes deletion. No matching pattern denies.
+The public Funnel principal is always read-only, so it can never hold `admin`.
+The full payload contract is in `docs/access-control.md`.
 
 The handler decides before it resolves a repository for creation and before it
 starts a backend process. A denied push can therefore never create a directory
@@ -78,10 +79,10 @@ or spawn git.
 | `cmd/tsgit` | Commands, config load, tsnet node, listeners, shutdown | `internal/*` |
 | `internal/config` | Flags, environment fallbacks, validation, dev root | stdlib, `ipn` |
 | `internal/identity` | Resolve a peer address, or the public node capability, to an `authz.Identity` | LocalAPI, `tailcfg` |
-| `internal/authz` | Pure read/write/create decision | stdlib only |
-| `internal/repos` | Canonical names, containment, metadata reads, atomic creation | a root directory, `git` |
+| `internal/authz` | Pure read/write/create/delete decision | stdlib only |
+| `internal/repos` | Canonical names, containment, metadata reads, atomic creation and deletion | a root directory, `git` |
 | `internal/transport` | Smart-HTTP routing and framing, backend seam | `identity`, `authz`, `repos` |
-| `internal/web` | Read-only discovery pages and metadata rendering | `identity`, `authz`, `repos` |
+| `internal/web` | Read-only discovery pages plus the admin deletion handler | `identity`, `authz`, `repos` |
 
 Dependency arrows point one way. `transport` and `web` are the only layers that
 know about a network request; `identity` is the only layer that knows about
@@ -89,8 +90,8 @@ Tailscale.
 
 ## HTTP surface
 
-The binary has two HTTP front ends. The git handler serves exactly four
-smart-HTTP endpoints:
+The tailnet listener serves three surfaces: git smart HTTP, discovery, and
+deletion. The git handler serves exactly four smart-HTTP endpoints:
 
 | Method | Path | Operation |
 |---|---|---|
@@ -100,9 +101,10 @@ smart-HTTP endpoints:
 | POST | `/<ns>/<repo>.git/git-receive-pack` | write + create |
 
 A request the git handler does not recognize is not refused by the system; it is
-routed to the discovery front end, and no git backend starts. Dispatch calls the
-git handler's own route parser, so a malformed smart-HTTP request is not treated
-as a repository summary; it receives the same not-found response as any other
+routed to the deletion handler when it targets `/.tsgit/delete/`, and to the
+discovery front end otherwise. No git backend starts. Dispatch calls the git
+handler's own route parser, so a malformed smart-HTTP request is not treated as
+a repository summary; it receives the same not-found response as any other
 unknown path.
 
 The request pipeline is: resolve identity, parse the route into name/service/
@@ -123,7 +125,7 @@ Status codes are deliberate:
 
 ### Discovery surface
 
-The same listeners serve a read-only HTML front end:
+The tailnet and public listeners serve a read-only HTML front end:
 
 | Method | Path | Page |
 |---|---|---|
@@ -157,6 +159,30 @@ falls back. Content types are
 `application/x-git-<service>-result`, with no-cache headers. Request bodies are
 streamed, gzip request bodies are inflated, and responses are flushed as the
 backend writes rather than buffered.
+
+### Deletion surface
+
+The tailnet listener serves an admin-only deletion page under the reserved
+`/.tsgit/` prefix:
+
+| Method | Path | Page |
+|---|---|---|
+| GET | `/.tsgit/delete/<ns>/<repo>` | confirmation |
+| POST | `/.tsgit/delete/<ns>/<repo>` | delete the repository |
+
+The handler is separate from discovery. It resolves the viewer through the same
+`WhoIs` path, requires `authz.Decide(id, name, OpDelete)` to allow, and returns
+the same `404` for a denied repository and a missing one. The confirmation page
+requires the canonical name to be typed. The `POST` carries a token signed over
+the peer node, repository, action, and a short expiry; a missing, altered, or
+expired token is `403`. An `Origin` or `Sec-Fetch-Site` header that names
+another origin is also `403`. There is no cookie, session, or server-side token
+store. A successful `POST` is a `303` redirect to the index.
+
+The Funnel composition does not mount the deletion handler, so the route is a
+structural `404` on the public listener. `cmd/tsgit` generates the signing key
+once at startup and passes it to the handler; a failure to read the system
+CSPRNG fails startup rather than silently disabling deletion.
 
 ### Public front end (Funnel)
 
@@ -253,6 +279,21 @@ Creation is atomic:
 5. Rename the finished bare directory into place. If a concurrent creator won,
    use the existing repository and remove the staging copy.
 6. Readers never see a half-initialized repository.
+
+Deletion uses the same lock and the staging directory:
+
+1. Validate and resolve the name.
+2. Lock the store and re-check that the directory exists and is not a symlink.
+3. Rename the bare directory into `.tsgit-tmp/delete-*`.
+4. Release the lock and remove that copy.
+
+The rename is the moment the repository disappears. A reader sees either the
+complete repository or a not-found result, never a partially deleted tree. A
+clone or push already in flight keeps its open inode and can finish; a request
+that starts after the rename gets not-found. A namespace directory left empty is
+removed best-effort. The shared lock serializes creation and deletion so a name
+cannot be created or removed between another operation's existence check and its
+rename.
 
 Every name is resolved under the root and checked again through any existing
 symlink. `..`, absolute paths, hidden names, control characters, and symlinks

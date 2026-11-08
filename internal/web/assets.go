@@ -16,6 +16,7 @@ var (
 	baseHTML   = mustRead("templates/base.html")
 	indexHTML  = mustRead("templates/index.html")
 	repoHTML   = mustRead("templates/repo.html")
+	deleteHTML = mustRead("templates/delete.html")
 	errorHTML  = mustRead("templates/error.html")
 	webCSS     = mustRead("static/web.css")
 	faviconSVG = mustRead("static/favicon.svg")

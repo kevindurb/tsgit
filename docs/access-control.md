@@ -21,6 +21,7 @@ The capability value is a JSON array of grant objects. Each object grants one
 ```json
 [
   {"repos": ["acme/*"], "access": "write"},
+  {"repos": ["acme/admin"], "access": "admin"},
   {"repos": ["shared/docs"], "access": "read"}
 ]
 ```
@@ -29,6 +30,7 @@ The capability value is a JSON array of grant objects. Each object grants one
 ```json
 [
   {"repos": ["acme/*"], "access": "write"},
+  {"repos": ["acme/admin"], "access": "admin"},
   {"repos": ["shared/docs"], "access": "read"}
 ]
 ```
@@ -36,11 +38,19 @@ The capability value is a JSON array of grant objects. Each object grants one
 | Field | Type | Meaning |
 |---|---|---|
 | `repos` | array of strings | Patterns matched against the canonical name |
-| `access` | `read` or `write` | Highest level this entry grants |
+| `access` | `read`, `write`, or `admin` | Highest level this entry grants |
+
+Access levels are ordered `read < write < admin`. `write` implies `read`, and
+`admin` implies `write`. Only `admin` authorizes deleting a repository.
 
 An unknown `access` value, an entry that is not an object, or any other shape
 that cannot be decoded makes the whole payload grant nothing. The failure is
 logged and no partial grant is applied.
+
+Adding `admin` changes the payload contract. An older `tsgit` binary cannot
+decode it and fails the whole payload closed, so a peer granted `admin` loses
+all repository access after a downgrade. Remove `admin` entries before rolling
+back to a version that does not know the level.
 
 ## Canonical names
 
@@ -52,7 +62,8 @@ supported in this slice.
 Patterns use Go's `path.Match` rules. `*` does not cross `/`, so `acme/*`
 matches `acme/widget` but not `other/widget` and not `acme/team/widget`.
 Grants union: if several entries match, the highest level wins. `write` implies
-`read` and authorizes creating a missing repository. No matching entry denies.
+`read` and authorizes creating a missing repository; `admin` implies `write` and
+authorizes deleting one. No matching entry denies.
 
 ## A complete grant
 
@@ -60,18 +71,33 @@ App capabilities only apply to traffic the device can already reach, so a
 working grant needs both `ip` and `app`:
 
 ```json
-"grants": [{
-  "src": ["group:devs", "tag:ci"],
-  "dst": ["tag:tsgit"],
-  "ip": ["tcp:443"],
-  "app": {
-    "github.com/kevindurb/tsgit/cap/repo": [
-      {"repos": ["acme/*"], "access": "write"},
-      {"repos": ["shared/docs"], "access": "read"}
-    ]
+"grants": [
+  {
+    "src": ["group:devs", "tag:ci"],
+    "dst": ["tag:tsgit"],
+    "ip": ["tcp:443"],
+    "app": {
+      "github.com/kevindurb/tsgit/cap/repo": [
+        {"repos": ["acme/*"], "access": "write"},
+        {"repos": ["shared/docs"], "access": "read"}
+      ]
+    }
+  },
+  {
+    "src": ["group:admins"],
+    "dst": ["tag:tsgit"],
+    "ip": ["tcp:443"],
+    "app": {
+      "github.com/kevindurb/tsgit/cap/repo": [
+        {"repos": ["acme/admin"], "access": "admin"}
+      ]
+    }
   }
-}]
+]
 ```
+
+Keep `admin` on a separate, narrower source than the write or CI grant, so a
+write-only identity never receives deletion authority.
 
 An `app`-only grant produces a capability nobody can reach.
 

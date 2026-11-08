@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -25,6 +26,9 @@ var (
 	ErrOutsideRoot = errors.New("repository path escapes root")
 	// ErrNotExist means the repository has not been created.
 	ErrNotExist = errors.New("repository does not exist")
+	// ErrCleanup means the repository disappeared from the served tree but
+	// its staging copy could not be removed.
+	ErrCleanup = errors.New("repository removed but cleanup failed")
 )
 
 // Store is a repository tree rooted at a single directory.
@@ -33,6 +37,10 @@ type Store struct {
 	staging       string
 	defaultBranch string
 	gitPath       string
+
+	// mu serializes creation and deletion so a name cannot be created and
+	// removed between another operation's existence check and its rename.
+	mu sync.Mutex
 }
 
 // Open validates the repository root and the git binary, creating the root and
@@ -182,6 +190,8 @@ func (s *Store) Create(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if dirNonEmpty(target) {
 		return target, nil
 	}
@@ -217,6 +227,66 @@ func (s *Store) Create(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("publish repository %s: %w", name, err)
 	}
 	return target, nil
+}
+
+// Delete permanently removes a repository. It renames the bare directory into
+// the staging area under the store lock, then removes that copy without the
+// lock held. The rename makes the repository disappear atomically and lets an
+// in-flight git process finish against its open files.
+func (s *Store) Delete(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	canonical, err := ParseName(name)
+	if err != nil {
+		return err
+	}
+	target, err := s.Resolve(canonical)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	info, err := os.Lstat(target)
+	if err != nil {
+		s.mu.Unlock()
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrNotExist
+		}
+		return fmt.Errorf("inspect repository %s: %w", canonical, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		s.mu.Unlock()
+		return fmt.Errorf("repository %s is a symlink; refusing to delete it", canonical)
+	}
+	if !info.IsDir() {
+		s.mu.Unlock()
+		return ErrNotExist
+	}
+
+	trash, err := os.MkdirTemp(s.staging, "delete-*")
+	if err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("stage deletion of %s: %w", canonical, err)
+	}
+	dest := filepath.Join(trash, filepath.Base(target))
+	if err := os.Rename(target, dest); err != nil {
+		s.mu.Unlock()
+		_ = os.Remove(trash)
+		return fmt.Errorf("remove repository %s: %w", canonical, err)
+	}
+	s.mu.Unlock()
+
+	cleanupErr := os.RemoveAll(trash)
+	if ns := filepath.Dir(target); ns != s.root {
+		if nsInfo, err := os.Lstat(ns); err == nil && nsInfo.IsDir() {
+			_ = os.Remove(ns)
+		}
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("%w: %v", ErrCleanup, cleanupErr)
+	}
+	return nil
 }
 
 // Commit is the latest commit visible on a repository's refs.

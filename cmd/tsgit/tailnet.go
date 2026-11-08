@@ -135,11 +135,15 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 	if err != nil {
 		return err
 	}
+	secret, err := csrfSecret()
+	if err != nil {
+		return err
+	}
 
 	domains := node.CertDomains()
 	hasHTTPS := node.status.Self != nil && node.status.Self.HasCap(tailcfg.CapabilityHTTPS)
 	if httpsEnabled(cfg.HTTPS, hasHTTPS, domains) {
-		return serveTLS(ctx, cfg, store, node, domains, logger)
+		return serveTLS(ctx, cfg, store, node, domains, secret, logger)
 	}
 	if cfg.HTTPS {
 		logger.Warn("HTTPS unavailable; serving plain HTTP", "cert_domains", len(domains), "capability", hasHTTPS)
@@ -153,9 +157,13 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 	if err != nil {
 		return fmt.Errorf("listen on tailnet:%d: %w", cfg.HTTPPort, err)
 	}
+	handler, err := newTailnetHandler(store, node, secret, logger, false)
+	if err != nil {
+		return err
+	}
 	logger.Info("serving git smart HTTP over HTTP", "hostname", cfg.Hostname, "port", cfg.HTTPPort)
 	srv := &http.Server{
-		Handler:           newTailnetHandler(store, node, logger, false),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return runHTTP(ctx, srv, ln, logger)
@@ -163,18 +171,30 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 
 // newTailnetHandler builds the private front end: tailnet identity, write
 // support, and optionally a badge marking repositories that are also public.
-func newTailnetHandler(store *repos.Store, node *tailnet, logger *slog.Logger, markPublic bool) http.Handler {
+func newTailnetHandler(store *repos.Store, node *tailnet, secret []byte, logger *slog.Logger, markPublic bool) (http.Handler, error) {
 	var publicResolver identity.Resolver
 	if markPublic {
 		publicResolver = identity.NewFunnel(node, logger)
 	}
-	return composeTailnet(store, identity.NewLocal(node, logger), publicResolver,
-		&transport.GitBin{Git: store.GitPath(), Log: logger}, logger)
+	resolver := identity.NewLocal(node, logger)
+	del, err := web.NewDeleteHandler(web.DeleteConfig{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+		Secret:   secret,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return composeTailnet(store, resolver, publicResolver,
+		&transport.GitBin{Git: store.GitPath(), Log: logger}, del, logger), nil
 }
 
 // composeTailnet wires the tailnet resolver into both front ends. The public
-// resolver, when present, is used only for the exposure badge.
-func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolver, backend transport.Backend, logger *slog.Logger) http.Handler {
+// resolver, when present, is used only for the exposure badge. The delete
+// handler is nil when the caller does not want the lifecycle surface.
+func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolver, backend transport.Backend, del *web.DeleteHandler, logger *slog.Logger) http.Handler {
 	gitHandler := transport.NewHandler(resolver, store, backend, logger)
 	webConfig := web.Config{
 		Resolver: resolver,
@@ -183,7 +203,7 @@ func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolv
 		Version:  version,
 	}
 	webConfig.PublicResolver = publicResolver
-	return front(gitHandler, web.New(webConfig))
+	return front(gitHandler, web.New(webConfig), del)
 }
 
 // newPublicHandler builds the Funnel front end.
@@ -204,10 +224,10 @@ func composePublic(store *repos.Store, resolver identity.Resolver, backend trans
 		Version:  version,
 		Public:   true,
 	})
-	return publicSurface(front(gitHandler, ui), maxConcurrent, logger)
+	return publicSurface(front(gitHandler, ui, nil), maxConcurrent, logger)
 }
 
-func serveTLS(ctx context.Context, cfg *config.Config, store *repos.Store, node *tailnet, domains []string, logger *slog.Logger) error {
+func serveTLS(ctx context.Context, cfg *config.Config, store *repos.Store, node *tailnet, domains []string, secret []byte, logger *slog.Logger) error {
 	host := domains[0]
 	tlsLn, err := node.ListenTLS("tcp", ":"+strconv.Itoa(cfg.Port))
 	if err != nil {
@@ -230,9 +250,13 @@ func serveTLS(ctx context.Context, cfg *config.Config, store *repos.Store, node 
 
 	publicLn, publicOn := openFunnelListener(cfg, node.status.Self, domains, node.ListenFunnel, logger)
 
+	tailnetHandler, err := newTailnetHandler(store, node, secret, logger, publicOn)
+	if err != nil {
+		return err
+	}
 	servers := []serverRun{{
 		srv: &http.Server{
-			Handler:           hstsHandler(newTailnetHandler(store, node, logger, publicOn)),
+			Handler:           hstsHandler(tailnetHandler),
 			ReadHeaderTimeout: 10 * time.Second,
 		},
 		ln: tlsLn,

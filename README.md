@@ -22,6 +22,7 @@ implemented.
 - Serves `git clone`, `fetch`, and `push` over smart HTTP to tailnet peers.
 - Creates a repository on an authorized first push.
 - Lists the repositories you can read at `https://<hostname>/`.
+- Deletes a repository from the web UI for viewers with `admin` access.
 - Authorizes from Tailscale identity and ACL tags. There is no user database.
 - Optionally publishes a policy-selected, read-only subset to the internet
   through Tailscale Funnel.
@@ -55,6 +56,26 @@ The grant needs both `ip` and `app`:
 Without a matching grant, every request returns `404`. That is deliberate: the
 server does not reveal whether a repository exists to someone who cannot read
 it. See [`docs/access-control.md`](docs/access-control.md) for the full payload.
+
+Deletion is a separate authority. Only the `admin` level can remove a
+repository, and it also implies `write` and `read`. Grant it narrowly:
+
+```json
+"grants": [{
+  "src": ["group:admins"],
+  "dst": ["tag:tsgit"],
+  "ip": ["tcp:443"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/repo": [
+      {"repos": ["acme/*"], "access": "admin"}
+    ]
+  }
+}]
+```
+
+Keep `admin` away from CI and other write-only identities. A peer granted
+`admin` cannot use an older `tsgit` binary: an unknown access value fails the
+whole capability payload closed, so remove admin entries before downgrading.
 
 ## Deploy
 
@@ -106,6 +127,29 @@ creates it on the first push:
 git remote add origin https://tsgit/acme/widget.git
 git push -u origin main
 ```
+
+### Delete a repository
+
+A viewer with `admin` on a repository sees a Delete link on its summary page.
+The confirmation page requires typing the canonical name, then permanently
+removes the directory and all of its history. There is no undo and no trash;
+back up the repository volume if you might need the data. The public Funnel
+listener does not serve the delete surface.
+
+### Rename a repository
+
+Rename is a client-side operation: mirror the old repository to the new name,
+then delete the old one in the web UI.
+
+```sh
+git clone --mirror https://tsgit/acme/widget.git widget.git
+cd widget.git
+git push --mirror https://tsgit/acme/gadget.git
+```
+
+The client needs `write` on the new name and `admin` on the old one. Refs and
+objects carry over; the bare repository's `description` and local config may
+not. Old clone URLs stop working once the old name is deleted.
 
 If HTTPS is unavailable, the node serves plain HTTP on port 80, so use
 `http://tsgit/`. WireGuard still encrypts the traffic.

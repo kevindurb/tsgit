@@ -143,7 +143,7 @@ func TestFrontDispatches(t *testing.T) {
 	ui := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ui")
 	})
-	handler := front(git, ui)
+	handler := front(git, ui, nil)
 
 	tests := []struct {
 		method string

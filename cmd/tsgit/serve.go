@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -58,7 +59,21 @@ func serveDev(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 		Log:      logger,
 		Version:  version,
 	})
-	handler := front(gitHandler, ui)
+	secret, err := csrfSecret()
+	if err != nil {
+		return err
+	}
+	del, err := web.NewDeleteHandler(web.DeleteConfig{
+		Resolver: resolver,
+		Store:    store,
+		Log:      logger,
+		Version:  version,
+		Secret:   secret,
+	})
+	if err != nil {
+		return err
+	}
+	handler := front(gitHandler, ui, del)
 
 	ln, err := devListen("tcp", cfg.DevListen)
 	if err != nil {
@@ -70,17 +85,37 @@ func serveDev(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	return runHTTP(ctx, srv, ln, logger)
 }
 
-// front routes requests the smart-HTTP handler recognizes to git and every
-// other path to the discovery front end. Dispatch is parse-based so a
-// malformed git request is never served as a repository summary.
-func front(git, ui http.Handler) http.Handler {
+// front routes requests the smart-HTTP handler recognizes to git, the
+// deletion surface to its own handler, and every other path to discovery.
+// Dispatch is parse-based so a malformed git request is never served as a
+// repository summary. A nil delete handler makes the reserved prefix a
+// structural 404, so the public listener cannot reach it.
+func front(git, ui http.Handler, del *web.DeleteHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if transport.Matches(r) {
 			git.ServeHTTP(w, r)
 			return
 		}
+		if web.MatchesDelete(r) {
+			if del != nil {
+				del.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		ui.ServeHTTP(w, r)
 	})
+}
+
+// csrfSecret returns the key used to sign deletion tokens for one server
+// lifetime. A failure to read the system CSPRNG fails startup.
+func csrfSecret() ([]byte, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generate deletion CSRF key: %w", err)
+	}
+	return secret, nil
 }
 
 func runHTTP(ctx context.Context, srv *http.Server, ln net.Listener, logger *slog.Logger) error {

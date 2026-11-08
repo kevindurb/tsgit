@@ -101,7 +101,7 @@ func TestResolveMalformedCapabilityGrantsNothing(t *testing.T) {
 func TestResolveUnknownAccessGrantsNothing(t *testing.T) {
 	client := fakeWhoIs{resp: &apitype.WhoIsResponse{
 		Node:   node(),
-		CapMap: capMap(`{"repos":["acme/*"],"access":"admin"}`),
+		CapMap: capMap(`{"repos":["acme/*"],"access":"owner"}`),
 	}}
 	id, err := NewLocal(client, nil).Resolve(context.Background(), "100.64.0.1:1234")
 	if err != nil {
@@ -109,6 +109,27 @@ func TestResolveUnknownAccessGrantsNothing(t *testing.T) {
 	}
 	if len(id.Grants) != 0 {
 		t.Fatalf("unknown access produced grants: %v", id.Grants)
+	}
+}
+
+func TestResolveAdminCapability(t *testing.T) {
+	client := fakeWhoIs{resp: &apitype.WhoIsResponse{
+		Node:        node(),
+		UserProfile: &tailcfg.UserProfile{LoginName: "alice@example.com"},
+		CapMap:      capMap(`{"repos":["acme/*"],"access":"admin"}`),
+	}}
+	id, err := NewLocal(client, nil).Resolve(context.Background(), "100.64.0.1:1234")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(id.Grants) != 1 || id.Grants[0].Access != authz.AccessAdmin {
+		t.Fatalf("grants = %+v, want one admin grant", id.Grants)
+	}
+	if got := authz.Decide(id, "acme/widget", authz.OpDelete); !got.Allow || !got.CanDelete {
+		t.Fatalf("resolved admin capability did not authorize deletion: %+v", got)
+	}
+	if got := authz.Decide(id, "other/widget", authz.OpDelete); got.Allow {
+		t.Fatal("admin grant crossed its namespace")
 	}
 }
 
@@ -146,10 +167,13 @@ func TestFixedResolver(t *testing.T) {
 	}
 }
 
-func TestDevelopmentIdentityIsWriter(t *testing.T) {
+func TestDevelopmentIdentityIsAdmin(t *testing.T) {
 	id := Development()
 	if got := authz.Decide(id, "acme/widget", authz.OpWrite); !got.Allow || !got.CanCreate {
 		t.Fatalf("development identity cannot write: %+v", got)
+	}
+	if got := authz.Decide(id, "acme/widget", authz.OpDelete); !got.Allow || !got.CanDelete {
+		t.Fatalf("development identity cannot delete: %+v", got)
 	}
 }
 
@@ -190,6 +214,9 @@ func TestFunnelResolveReadOnlyGrants(t *testing.T) {
 	}
 	if got := authz.Decide(id, "public/widget", authz.OpCreate); got.Allow || got.CanCreate {
 		t.Fatalf("public create allowed: %+v", got)
+	}
+	if got := authz.Decide(id, "public/widget", authz.OpDelete); got.Allow || got.CanDelete {
+		t.Fatalf("public delete allowed: %+v", got)
 	}
 	if got := authz.Decide(id, "other/secret", authz.OpRead); got.Allow {
 		t.Fatal("repository outside the public patterns was readable")

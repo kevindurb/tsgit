@@ -10,35 +10,51 @@ import (
 func TestDecide(t *testing.T) {
 	write := []Grant{{Repos: []string{"acme/*"}, Access: AccessWrite}}
 	read := []Grant{{Repos: []string{"acme/*"}, Access: AccessRead}}
+	admin := []Grant{{Repos: []string{"acme/*"}, Access: AccessAdmin}}
 	both := []Grant{
 		{Repos: []string{"acme/*"}, Access: AccessRead},
 		{Repos: []string{"acme/widget"}, Access: AccessWrite},
 	}
+	unionWithAdmin := []Grant{
+		{Repos: []string{"acme/widget"}, Access: AccessWrite},
+		{Repos: []string{"acme/*"}, Access: AccessAdmin},
+	}
 
 	tests := []struct {
-		name    string
-		grants  []Grant
-		repo    string
-		op      Op
-		allow   bool
-		canMake bool
+		name      string
+		grants    []Grant
+		repo      string
+		op        Op
+		allow     bool
+		canMake   bool
+		canDelete bool
 	}{
 		{name: "no grants deny read", repo: "acme/widget", op: OpRead, allow: false},
 		{name: "no grants deny write", repo: "acme/widget", op: OpWrite, allow: false},
 		{name: "no grants deny create", repo: "acme/widget", op: OpCreate, allow: false},
+		{name: "no grants deny delete", repo: "acme/widget", op: OpDelete, allow: false},
 		{name: "read allows read", grants: read, repo: "acme/widget", op: OpRead, allow: true},
 		{name: "read denies write", grants: read, repo: "acme/widget", op: OpWrite, allow: false},
 		{name: "read denies create", grants: read, repo: "acme/widget", op: OpCreate, allow: false},
+		{name: "read denies delete", grants: read, repo: "acme/widget", op: OpDelete, allow: false},
 		{name: "write allows read", grants: write, repo: "acme/widget", op: OpRead, allow: true, canMake: true},
 		{name: "write allows write", grants: write, repo: "acme/widget", op: OpWrite, allow: true, canMake: true},
 		{name: "write allows create", grants: write, repo: "acme/widget", op: OpCreate, allow: true, canMake: true},
+		{name: "write denies delete", grants: write, repo: "acme/widget", op: OpDelete, allow: false, canMake: true},
 		{name: "write does not cross namespace", grants: write, repo: "other/widget", op: OpWrite, allow: false},
+		{name: "admin allows read", grants: admin, repo: "acme/widget", op: OpRead, allow: true, canMake: true, canDelete: true},
+		{name: "admin allows write", grants: admin, repo: "acme/widget", op: OpWrite, allow: true, canMake: true, canDelete: true},
+		{name: "admin allows create", grants: admin, repo: "acme/widget", op: OpCreate, allow: true, canMake: true, canDelete: true},
+		{name: "admin allows delete", grants: admin, repo: "acme/widget", op: OpDelete, allow: true, canMake: true, canDelete: true},
+		{name: "admin does not cross namespace", grants: admin, repo: "other/widget", op: OpDelete, allow: false},
+		{name: "admin does not cross namespace for read", grants: admin, repo: "other/widget", op: OpRead, allow: false},
 		{name: "union takes highest level", grants: both, repo: "acme/widget", op: OpWrite, allow: true, canMake: true},
+		{name: "union with admin takes admin", grants: unionWithAdmin, repo: "acme/widget", op: OpDelete, allow: true, canMake: true, canDelete: true},
 		{name: "read pattern does not match another repo", grants: read, repo: "shared/docs", op: OpRead, allow: false},
 		{name: "star does not cross separator", grants: []Grant{{Repos: []string{"acme*"}, Access: AccessWrite}}, repo: "acme/widget", op: OpRead, allow: false},
 		{name: "malformed pattern grants nothing", grants: []Grant{{Repos: []string{"["}, Access: AccessWrite}}, repo: "acme/widget", op: OpRead, allow: false},
 		{name: "tagged identity needs no login", grants: write, repo: "acme/widget", op: OpRead, allow: true, canMake: true},
-		{name: "unknown operation denies", grants: write, repo: "acme/widget", op: Op("delete"), allow: false, canMake: true},
+		{name: "unknown operation denies", grants: write, repo: "acme/widget", op: Op("archive"), allow: false, canMake: true},
 	}
 
 	for _, tt := range tests {
@@ -54,13 +70,16 @@ func TestDecide(t *testing.T) {
 			if d.CanCreate != tt.canMake {
 				t.Fatalf("CanCreate = %v, want %v", d.CanCreate, tt.canMake)
 			}
+			if d.CanDelete != tt.canDelete {
+				t.Fatalf("CanDelete = %v, want %v", d.CanDelete, tt.canDelete)
+			}
 		})
 	}
 }
 
 func TestAccessRejectsUnknownValue(t *testing.T) {
 	var g Grant
-	err := json.Unmarshal([]byte(`{"repos":["acme/*"],"access":"admin"}`), &g)
+	err := json.Unmarshal([]byte(`{"repos":["acme/*"],"access":"owner"}`), &g)
 	if err == nil {
 		t.Fatal("unknown access value must fail decoding")
 	}
@@ -73,6 +92,7 @@ func TestAccessParsesDocumentedValues(t *testing.T) {
 	}{
 		{`{"repos":["a/b"],"access":"read"}`, AccessRead},
 		{`{"repos":["a/b"],"access":"write"}`, AccessWrite},
+		{`{"repos":["a/b"],"access":"admin"}`, AccessAdmin},
 	} {
 		var g Grant
 		if err := json.Unmarshal([]byte(tc.in), &g); err != nil {
@@ -111,16 +131,23 @@ func TestDocumentedCapabilityFixture(t *testing.T) {
 	if err := json.Unmarshal([]byte(rest[:end]), &grants); err != nil {
 		t.Fatalf("documented fixture does not parse: %v", err)
 	}
-	if len(grants) != 2 {
-		t.Fatalf("documented fixture has %d grants, want 2", len(grants))
+	if len(grants) != 3 {
+		t.Fatalf("documented fixture has %d grants, want 3", len(grants))
 	}
-	if got := Decide(Identity{Grants: grants}, "acme/widget", OpWrite); !got.Allow {
+	id := Identity{Grants: grants}
+	if got := Decide(id, "acme/widget", OpWrite); !got.Allow {
 		t.Fatal("documented write grant does not allow acme/widget")
 	}
-	if got := Decide(Identity{Grants: grants}, "shared/docs", OpRead); !got.Allow {
+	if got := Decide(id, "acme/admin", OpDelete); !got.Allow || !got.CanDelete {
+		t.Fatal("documented admin grant does not allow deleting acme/admin")
+	}
+	if got := Decide(id, "acme/widget", OpDelete); got.Allow {
+		t.Fatal("documented write grant unexpectedly allows deletion")
+	}
+	if got := Decide(id, "shared/docs", OpRead); !got.Allow {
 		t.Fatal("documented read grant does not allow shared/docs")
 	}
-	if got := Decide(Identity{Grants: grants}, "other/widget", OpWrite); got.Allow {
+	if got := Decide(id, "other/widget", OpWrite); got.Allow {
 		t.Fatal("documented grant unexpectedly allows other/widget")
 	}
 }
@@ -138,9 +165,9 @@ func TestPublicIdentityIsReadOnly(t *testing.T) {
 		}
 	}
 	for _, repo := range []string{"public/widget", "shared/docs", "other/secret"} {
-		for _, op := range []Op{OpWrite, OpCreate} {
+		for _, op := range []Op{OpWrite, OpCreate, OpDelete} {
 			got := Decide(id, repo, op)
-			if got.Allow || got.CanCreate {
+			if got.Allow || got.CanCreate || got.CanDelete {
 				t.Fatalf("public %s of %s allowed: %+v", op, repo, got)
 			}
 		}

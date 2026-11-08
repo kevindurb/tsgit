@@ -12,6 +12,10 @@
   --accent-fill-hover: #3f5db3;
   --on-accent: #ffffff;
   --code-bg: #f7f5f4;
+  --danger-text: #b42318;
+  --danger-fill: #b42318;
+  --danger-fill-hover: #912018;
+  --on-danger: #ffffff;
   --radius: 8px;
   --width: 1120px;
 }
@@ -30,6 +34,9 @@
     --accent-fill-hover: #6b8ee0;
     --on-accent: #ffffff;
     --code-bg: #2a2929;
+    --danger-text: #f97066;
+    --danger-fill: #b42318;
+    --danger-fill-hover: #912018;
   }
 }
 
@@ -66,7 +73,8 @@ a:hover {
 }
 
 a:focus-visible,
-button:focus-visible {
+button:focus-visible,
+input:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
@@ -269,6 +277,15 @@ tbody tr:hover {
   color: var(--accent-text);
 }
 
+.badge-admin {
+  border-color: var(--danger-fill);
+  color: var(--danger-text);
+}
+
+.page-head .delete-link {
+  margin-left: auto;
+}
+
 .badge-public {
   border-color: var(--accent-fill);
   color: var(--accent-text);
@@ -366,6 +383,76 @@ pre {
 .error-page {
   max-width: 560px;
   margin: 40px auto;
+}
+
+.form {
+  margin-bottom: 24px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.form label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.form input[type="text"] {
+  width: 100%;
+  max-width: 420px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.button {
+  padding: 9px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--surface-hover);
+}
+
+.button.danger {
+  border-color: var(--danger-fill);
+  background: var(--danger-fill);
+  color: var(--on-danger);
+}
+
+.button.danger:hover {
+  background: var(--danger-fill-hover);
+}
+
+.notice.danger {
+  border-left-color: var(--danger-fill);
+}
+
+.form-error {
+  margin: 10px 0 0;
+  color: var(--danger-text);
+}
+
+.delete-link {
+  color: var(--danger-text);
 }
 
 @media (max-width: 700px) {

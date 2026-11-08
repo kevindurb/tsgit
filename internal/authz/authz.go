@@ -1,5 +1,5 @@
-// Package authz decides whether a tailnet identity may read, write, or create a
-// canonical repository. It works on plain values only: an identity, a
+// Package authz decides whether a tailnet identity may read, write, create, or
+// delete a canonical repository. It works on plain values only: an identity, a
 // repository name, and an operation. It never sees a connection, an HTTP
 // request, or a Tailscale type, which keeps the decision testable without a
 // tailnet.
@@ -32,6 +32,7 @@ const (
 	AccessNone Access = iota
 	AccessRead
 	AccessWrite
+	AccessAdmin
 )
 
 func (a Access) String() string {
@@ -40,6 +41,8 @@ func (a Access) String() string {
 		return "read"
 	case AccessWrite:
 		return "write"
+	case AccessAdmin:
+		return "admin"
 	default:
 		return "none"
 	}
@@ -57,6 +60,8 @@ func (a *Access) UnmarshalJSON(b []byte) error {
 		*a = AccessRead
 	case "write":
 		*a = AccessWrite
+	case "admin":
+		*a = AccessAdmin
 	default:
 		return fmt.Errorf("unknown access %q", s)
 	}
@@ -120,14 +125,17 @@ const (
 	OpRead   Op = "read"
 	OpWrite  Op = "write"
 	OpCreate Op = "create"
+	OpDelete Op = "delete"
 )
 
-// Decision is the result of an authorization check. CanCreate is true exactly
-// when a write grant matches the canonical name.
+// Decision is the result of an authorization check. CanCreate is true when a
+// write or admin grant matches the canonical name; CanDelete is true only for
+// an admin grant.
 type Decision struct {
 	Allow     bool
 	Access    Access
 	CanCreate bool
+	CanDelete bool
 	Reason    string
 }
 
@@ -150,12 +158,18 @@ func Decide(id Identity, repo string, op Op) Decision {
 		}
 	}
 
-	d := Decision{Access: best, CanCreate: best == AccessWrite}
+	d := Decision{
+		Access:    best,
+		CanCreate: best >= AccessWrite,
+		CanDelete: best >= AccessAdmin,
+	}
 	switch op {
 	case OpRead:
 		d.Allow = best >= AccessRead
 	case OpWrite, OpCreate:
-		d.Allow = best == AccessWrite
+		d.Allow = best >= AccessWrite
+	case OpDelete:
+		d.Allow = best >= AccessAdmin
 	default:
 		d.Allow = false
 	}

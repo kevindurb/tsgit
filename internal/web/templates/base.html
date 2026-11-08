@@ -26,7 +26,7 @@
   <footer class="site-footer">
     <div class="wrap">
       <span>tsgit {{.Version}}</span>
-      <span>read-only discovery</span>
+      <span>{{if .Admin}}repository administration{{else}}read-only discovery{{end}}</span>
     </div>
   </footer>
 </body>

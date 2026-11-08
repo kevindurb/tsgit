@@ -147,6 +147,33 @@ cannot bind, `tsgit` logs an error and keeps serving the tailnet only. Removing
 the `cap/funnel` payload makes the public surface empty on the next request; it
 does not affect the tailnet.
 
+## Deleting repositories
+
+Repository deletion is part of the tailnet web UI and needs no flag. A viewer
+sees the Delete action only when the `cap/repo` capability grants `admin` on
+that repository. The Funnel listener does not serve the deletion route.
+
+Grant an operator group a narrow admin scope:
+
+```json
+"grants": [{
+  "src": ["group:admins"],
+  "dst": ["tag:tsgit"],
+  "ip": ["tcp:443"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/repo": [
+      {"repos": ["acme/*"], "access": "admin"},
+      {"repos": ["shared/docs"], "access": "read"}
+    ]
+  }
+}]
+```
+
+`admin` implies `write` and `read`, so a separate write grant is not needed for
+the same patterns. Keep the scope narrow: an admin can delete every repository
+its patterns match. An older `tsgit` binary cannot decode an `admin` value and
+fails the whole payload closed, so remove admin grants before downgrading.
+
 ## Bind mounts and ownership
 
 Named volumes inherit the image directories' ownership. Bind mounts do not.

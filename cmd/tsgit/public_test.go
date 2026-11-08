@@ -379,7 +379,7 @@ func TestComposeTailnetUsesTailnetResolverForGit(t *testing.T) {
 	}}
 	publicResolver := &recordingResolver{id: authz.PublicIdentity([]authz.FunnelGrant{{Repos: []string{"public/*"}}})}
 	backend := &recordingBackend{}
-	handler := composeTailnet(store, tailnetResolver, publicResolver, backend, logger)
+	handler := composeTailnet(store, tailnetResolver, publicResolver, backend, nil, logger)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
@@ -401,7 +401,7 @@ func TestComposeTailnetUsesTailnetResolverForGit(t *testing.T) {
 		Grants: []authz.Grant{{Repos: []string{"*/*"}, Access: authz.AccessRead}},
 	}}
 	indexPublic := &recordingResolver{id: authz.PublicIdentity([]authz.FunnelGrant{{Repos: []string{"public/*"}}})}
-	indexHandler := composeTailnet(store, indexResolver, indexPublic, backend, logger)
+	indexHandler := composeTailnet(store, indexResolver, indexPublic, backend, nil, logger)
 
 	rec = httptest.NewRecorder()
 	indexHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -410,6 +410,34 @@ func TestComposeTailnetUsesTailnetResolverForGit(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "badge-public") {
 		t.Fatal("tailnet index does not mark the public repository")
+	}
+}
+
+func TestPublicCompositionDoesNotServeDeletion(t *testing.T) {
+	logger := testLogger(io.Discard)
+	store, err := repos.Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(context.Background(), "public/widget"); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &recordingBackend{}
+	resolver := identity.NewFunnel(fakeStatus{status: publicStatus(`{"repos":["public/*"]}`)}, logger)
+	handler := composePublic(store, resolver, backend, 4, logger)
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		req := httptest.NewRequest(method, "/.tsgit/delete/public/widget", nil)
+		req.RemoteAddr = "192.0.2.10:443"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404", method, rec.Code)
+		}
+	}
+	if !store.Exists("public/widget") {
+		t.Fatal("a public deletion request removed the repository")
 	}
 }
 

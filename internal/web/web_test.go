@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +26,11 @@ func (f fakeResolver) Resolve(context.Context, string) (authz.Identity, error) {
 }
 
 type fakeStore struct {
-	infos   []repos.Info
-	listErr error
-	infoErr map[string]error
+	infos     []repos.Info
+	listErr   error
+	infoErr   map[string]error
+	deleteErr error
+	deleted   []string
 }
 
 func (f *fakeStore) List(context.Context) ([]repos.Info, error) {
@@ -41,6 +44,20 @@ func (f *fakeStore) Info(_ context.Context, name string) (repos.Info, error) {
 		}
 	}
 	return repos.Info{Name: name}, repos.ErrNotExist
+}
+
+func (f *fakeStore) Delete(_ context.Context, name string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	for i, info := range f.infos {
+		if info.Name == name {
+			f.infos = append(f.infos[:i], f.infos[i+1:]...)
+			f.deleted = append(f.deleted, name)
+			return nil
+		}
+	}
+	return repos.ErrNotExist
 }
 
 func newTestHandler(t *testing.T, id authz.Identity, store RepositoryStore) *Handler {
@@ -69,12 +86,53 @@ func writerIdentity() authz.Identity {
 	}
 }
 
+func adminIdentity() authz.Identity {
+	return authz.Identity{
+		Node:   "admin",
+		Login:  "admin@example.com",
+		Grants: []authz.Grant{{Repos: []string{"*/*"}, Access: authz.AccessAdmin}},
+	}
+}
+
 func request(h http.Handler, method, target string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
 	req.RemoteAddr = "100.64.0.1:1234"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func postForm(h http.Handler, target string, form url.Values, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.RemoteAddr = "100.64.0.1:1234"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+const testDeleteSecret = "0123456789abcdef0123456789abcdef"
+
+func newDeleteTestHandler(t *testing.T, id authz.Identity, store DeleteStore) *DeleteHandler {
+	t.Helper()
+	h, err := NewDeleteHandler(DeleteConfig{
+		Resolver: fakeResolver{id: id},
+		Store:    store,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Version:  "test",
+		Secret:   []byte(testDeleteSecret),
+	})
+	if err != nil {
+		t.Fatalf("NewDeleteHandler: %v", err)
+	}
+	return h
+}
+
+func deleteTokenFor(id authz.Identity, repo string, now time.Time) string {
+	return signDeleteToken([]byte(testDeleteSecret), id.Node, repo, now)
 }
 
 func TestIndexFiltersAndShowsCloneAndAccess(t *testing.T) {
@@ -515,5 +573,276 @@ func TestPublicSummaryDeniedAndMissingAreIdentical(t *testing.T) {
 	}
 	if denied.Body.String() != missing.Body.String() {
 		t.Fatal("public non-public and missing summaries differ")
+	}
+}
+
+func TestDeleteConfirmPage(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{
+		Name:        "acme/widget",
+		Description: "widget service",
+		Branch:      "main",
+		Latest:      repos.Commit{Hash: "abc1234", Subject: "fix", When: time.Now().Add(-time.Hour)},
+	}}}
+	rec := request(newDeleteTestHandler(t, adminIdentity(), store), http.MethodGet, "/.tsgit/delete/acme/widget")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Delete acme/widget",
+		"permanently",
+		"widget service",
+		"main",
+		"abc1234",
+		"http://example.com/acme/widget.git",
+		`name="csrf"`,
+		`name="confirm"`,
+		"repository administration",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("confirmation page does not contain %q", want)
+		}
+	}
+}
+
+func TestDeleteWriterRefused(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	rec := request(newDeleteTestHandler(t, writerIdentity(), store), http.MethodGet, "/.tsgit/delete/acme/widget")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteDeniedAndMissingIdentical(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	denied := request(newDeleteTestHandler(t, writerIdentity(), store), http.MethodGet, "/.tsgit/delete/acme/widget")
+	missing := request(newDeleteTestHandler(t, adminIdentity(), store), http.MethodGet, "/.tsgit/delete/acme/missing")
+	if denied.Code != http.StatusNotFound || missing.Code != http.StatusNotFound {
+		t.Fatalf("statuses = %d and %d, want 404 and 404", denied.Code, missing.Code)
+	}
+	if denied.Body.String() != missing.Body.String() {
+		t.Fatal("denied and missing deletion pages differ")
+	}
+}
+
+func TestDeleteMatchingConfirmation(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	form := url.Values{
+		"csrf":    []string{deleteTokenFor(id, "acme/widget", time.Now())},
+		"confirm": []string{"acme/widget"},
+	}
+	rec := postForm(h, "/.tsgit/delete/acme/widget", form, map[string]string{
+		"Origin":         "http://example.com",
+		"Sec-Fetch-Site": "same-origin",
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/?deleted=acme%2Fwidget" {
+		t.Fatalf("Location = %q", got)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "acme/widget" {
+		t.Fatalf("deleted = %v, want acme/widget", store.deleted)
+	}
+	if _, err := store.Info(context.Background(), "acme/widget"); !errors.Is(err, repos.ErrNotExist) {
+		t.Fatalf("repository still exists after delete: %v", err)
+	}
+}
+
+func TestDeleteMismatchedConfirmation(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	form := url.Values{
+		"csrf":    []string{deleteTokenFor(id, "acme/widget", time.Now())},
+		"confirm": []string{"acme/widg"},
+	}
+	rec := postForm(h, "/.tsgit/delete/acme/widget", form, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if len(store.deleted) != 0 {
+		t.Fatalf("mismatched confirmation deleted %v", store.deleted)
+	}
+	if !strings.Contains(rec.Body.String(), "Type the exact repository name") {
+		t.Fatalf("mismatch body = %q", rec.Body.String())
+	}
+}
+
+func TestDeleteCrossSiteRefused(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	form := url.Values{
+		"csrf":    []string{deleteTokenFor(id, "acme/widget", time.Now())},
+		"confirm": []string{"acme/widget"},
+	}
+	for _, headers := range []map[string]string{
+		{"Origin": "https://evil.example"},
+		{"Sec-Fetch-Site": "cross-site"},
+		{"Sec-Fetch-Site": "same-site"},
+	} {
+		store.deleted = nil
+		rec := postForm(h, "/.tsgit/delete/acme/widget", form, headers)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("headers %v: status = %d, want 403", headers, rec.Code)
+		}
+		if len(store.deleted) != 0 {
+			t.Fatalf("headers %v: deleted %v", headers, store.deleted)
+		}
+	}
+}
+
+func TestDeleteBadTokenRefused(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	valid := deleteTokenFor(id, "acme/widget", time.Now())
+	otherNode := id
+	otherNode.Node = "other"
+	for name, token := range map[string]string{
+		"missing":    "",
+		"altered":    valid + "x",
+		"expired":    deleteTokenFor(id, "acme/widget", time.Now().Add(-2*time.Hour)),
+		"other repo": deleteTokenFor(id, "acme/other", time.Now()),
+		"other node": deleteTokenFor(otherNode, "acme/widget", time.Now()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store.deleted = nil
+			form := url.Values{
+				"csrf":    []string{token},
+				"confirm": []string{"acme/widget"},
+			}
+			rec := postForm(h, "/.tsgit/delete/acme/widget", form, map[string]string{"Origin": "http://example.com"})
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			if len(store.deleted) != 0 {
+				t.Fatalf("bad token deleted %v", store.deleted)
+			}
+		})
+	}
+}
+
+func TestDeleteIdentityFailure(t *testing.T) {
+	h, err := NewDeleteHandler(DeleteConfig{
+		Resolver: fakeResolver{err: errors.New("no whois")},
+		Store:    &fakeStore{},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Secret:   []byte(testDeleteSecret),
+	})
+	if err != nil {
+		t.Fatalf("NewDeleteHandler: %v", err)
+	}
+	rec := request(h, http.MethodGet, "/.tsgit/delete/acme/widget")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestDeleteMethodNotAllowed(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	rec := request(newDeleteTestHandler(t, adminIdentity(), store), http.MethodPut, "/.tsgit/delete/acme/widget")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); allow != "GET, HEAD, POST" {
+		t.Fatalf("Allow = %q", allow)
+	}
+}
+
+func TestDeleteCleanupErrorStillRedirects(t *testing.T) {
+	store := &fakeStore{
+		infos:     []repos.Info{{Name: "acme/widget"}},
+		deleteErr: repos.ErrCleanup,
+	}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	form := url.Values{
+		"csrf":    []string{deleteTokenFor(id, "acme/widget", time.Now())},
+		"confirm": []string{"acme/widget"},
+	}
+	rec := postForm(h, "/.tsgit/delete/acme/widget", form, nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+}
+
+func TestDeleteStoreError(t *testing.T) {
+	store := &fakeStore{
+		infos:     []repos.Info{{Name: "acme/widget"}},
+		deleteErr: errors.New("boom"),
+	}
+	id := adminIdentity()
+	h := newDeleteTestHandler(t, id, store)
+	form := url.Values{
+		"csrf":    []string{deleteTokenFor(id, "acme/widget", time.Now())},
+		"confirm": []string{"acme/widget"},
+	}
+	rec := postForm(h, "/.tsgit/delete/acme/widget", form, nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestNewDeleteHandlerRequiresSecret(t *testing.T) {
+	if _, err := NewDeleteHandler(DeleteConfig{
+		Resolver: fakeResolver{},
+		Store:    &fakeStore{},
+		Secret:   []byte("short"),
+	}); err == nil {
+		t.Fatal("short CSRF key was accepted")
+	}
+}
+
+func TestDeleteTokenVerification(t *testing.T) {
+	secret := []byte(testDeleteSecret)
+	now := time.Now()
+	token := signDeleteToken(secret, "admin", "acme/widget", now)
+	if !verifyDeleteToken(secret, token, "admin", "acme/widget", now) {
+		t.Fatal("valid token was rejected")
+	}
+	for name, verify := range map[string]bool{
+		"other node": verifyDeleteToken(secret, token, "other", "acme/widget", now),
+		"other repo": verifyDeleteToken(secret, token, "admin", "acme/other", now),
+		"expired":    verifyDeleteToken(secret, token, "admin", "acme/widget", now.Add(2*time.Hour)),
+		"altered":    verifyDeleteToken(secret, token+"x", "admin", "acme/widget", now),
+	} {
+		if verify {
+			t.Errorf("%s token was accepted", name)
+		}
+	}
+}
+
+func TestSummaryShowsDeleteLinkForAdmin(t *testing.T) {
+	store := &fakeStore{infos: []repos.Info{{Name: "acme/widget"}}}
+	adminBody := request(newTestHandler(t, adminIdentity(), store), http.MethodGet, "/acme/widget").Body.String()
+	if !strings.Contains(adminBody, "/.tsgit/delete/acme/widget") {
+		t.Fatal("admin summary has no delete link")
+	}
+	if !strings.Contains(adminBody, "badge-admin") {
+		t.Fatal("admin summary has no admin badge")
+	}
+
+	writerBody := request(newTestHandler(t, writerIdentity(), store), http.MethodGet, "/acme/widget").Body.String()
+	if strings.Contains(writerBody, "/.tsgit/delete/") {
+		t.Fatal("writer summary has a delete link")
+	}
+	if !strings.Contains(writerBody, "badge-write") {
+		t.Fatal("writer summary has no write badge")
+	}
+}
+
+func TestIndexShowsDeletedNotice(t *testing.T) {
+	handler := newTestHandler(t, adminIdentity(), &fakeStore{})
+	body := request(handler, http.MethodGet, "/?deleted=acme%2Fwidget").Body.String()
+	if !strings.Contains(body, "Deleted acme/widget") {
+		t.Fatalf("index does not show the deletion notice: %q", body)
+	}
+	body = request(handler, http.MethodGet, "/?deleted=not-a-name").Body.String()
+	if strings.Contains(body, "Deleted ") {
+		t.Fatal("invalid deletion notice was rendered")
 	}
 }

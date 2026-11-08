@@ -3,7 +3,8 @@
 
 <div class="page-head">
   <h1>{{.Repo.Name}}</h1>
-  {{if .Repo.Writable}}<span class="badge badge-write">write</span>{{else}}<span class="badge">read</span>{{end}}
+  {{if .Repo.Deletable}}<span class="badge badge-admin">admin</span>{{else if .Repo.Writable}}<span class="badge badge-write">write</span>{{else}}<span class="badge">read</span>{{end}}
+  {{if .Repo.Deletable}}<a class="delete-link" href="/.tsgit/delete{{.Repo.Path}}">Delete</a>{{end}}
 </div>
 
 {{if .Repo.Description}}<p class="description">{{.Repo.Description}}</p>{{end}}

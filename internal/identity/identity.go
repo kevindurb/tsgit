@@ -143,7 +143,7 @@ func Development() authz.Identity {
 		Node:  "development",
 		Login: "development",
 		Grants: []authz.Grant{
-			{Repos: []string{"*/*"}, Access: authz.AccessWrite},
+			{Repos: []string{"*/*"}, Access: authz.AccessAdmin},
 		},
 	}
 }

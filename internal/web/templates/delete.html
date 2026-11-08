@@ -1,0 +1,45 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/">Repositories</a><span>/</span><a href="{{.Repo.Path}}">{{.Repo.Name}}</a><span>/</span>Delete</nav>
+
+<div class="page-head">
+  <h1>Delete {{.Repo.Name}}</h1>
+</div>
+
+<div class="notice danger">
+  <p><strong>This permanently deletes the repository and all of its history.</strong> This cannot be undone. If you might need the data, back up the repository volume first.</p>
+</div>
+
+{{if .Repo.MetadataErr}}
+<p class="notice">Some metadata for this repository could not be read.</p>
+{{end}}
+
+<dl class="meta">
+  <dt>Description</dt>
+  <dd>{{if .Repo.Description}}{{.Repo.Description}}{{else}}<span class="muted">&mdash;</span>{{end}}</dd>
+
+  <dt>Default branch</dt>
+  <dd>{{if .Repo.Branch}}<code>{{.Repo.Branch}}</code>{{else}}<span class="muted">detached HEAD</span>{{end}}</dd>
+
+  <dt>Latest commit</dt>
+  <dd>
+    {{if .Repo.Latest.Hash}}<code>{{.Repo.Latest.Hash}}</code> {{.Repo.Latest.Subject}}{{if .Repo.Updated}} <span class="muted">{{.Repo.Updated}}</span>{{end}}{{else}}<span class="muted">&mdash;</span>{{end}}
+  </dd>
+
+  <dt>Clone</dt>
+  <dd><code>{{.Repo.CloneURL}}</code></dd>
+</dl>
+
+<form class="form" method="post" action="">
+  <input type="hidden" name="csrf" value="{{.Token}}">
+
+  <label for="confirm">Type <code>{{.Repo.Name}}</code> to confirm</label>
+  <input id="confirm" name="confirm" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+
+  {{if .Error}}<p class="form-error">{{.Error}}</p>{{end}}
+
+  <div class="form-actions">
+    <button type="submit" class="button danger">Delete permanently</button>
+    <a href="{{.Repo.Path}}">Cancel</a>
+  </div>
+</form>
+{{end}}

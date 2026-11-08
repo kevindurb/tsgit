@@ -154,7 +154,7 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 		if info.Err != nil {
 			h.log.Warn("repository metadata unavailable", "repo", info.Name, "error", info.Err)
 		}
-		view := h.view(r, info, decision.CanCreate)
+		view := h.view(r, info, decision.CanCreate, decision.CanDelete)
 		if hasPublic {
 			view.Public = authz.Decide(publicID, info.Name, authz.OpRead).Allow
 		}
@@ -162,6 +162,12 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 	}
 	sortViews(views)
 
+	var notice string
+	if deleted := r.URL.Query().Get("deleted"); deleted != "" {
+		if name, err := repos.ParseName(deleted); err == nil {
+			notice = "Deleted " + name
+		}
+	}
 	h.render(w, r, http.StatusOK, h.indexTmpl, indexPage{
 		pageData: pageData{
 			Title:    "Repositories",
@@ -169,7 +175,8 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request, id authz.Id
 			Identity: identityLabel(id),
 			Public:   h.public,
 		},
-		Repos: views,
+		Repos:  views,
+		Notice: notice,
 	})
 }
 
@@ -228,7 +235,7 @@ func (h *Handler) servePath(w http.ResponseWriter, r *http.Request, id authz.Ide
 		h.log.Warn("repository metadata unavailable", "repo", info.Name, "error", info.Err)
 	}
 
-	view := h.view(r, info, decision.CanCreate)
+	view := h.view(r, info, decision.CanCreate, decision.CanDelete)
 	view.MetadataErr = metadataErr
 	h.render(w, r, http.StatusOK, h.repoTmpl, repoPage{
 		pageData: pageData{
@@ -249,10 +256,14 @@ func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, status int
 }
 
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, tmpl *template.Template, data any) {
+	renderPage(w, r, status, tmpl, data, h.log)
+}
+
+func renderPage(w http.ResponseWriter, r *http.Request, status int, tmpl *template.Template, data any, log *slog.Logger) {
 	securityHeaders(w)
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, "base", data); err != nil {
-		h.log.Error("render page", "path", r.URL.Path, "error", err)
+		log.Error("render page", "path", r.URL.Path, "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -277,11 +288,13 @@ type pageData struct {
 	Version  string
 	Identity string
 	Public   bool
+	Admin    bool
 }
 
 type indexPage struct {
 	pageData
-	Repos []repoView
+	Repos  []repoView
+	Notice string
 }
 
 type repoPage struct {
@@ -305,13 +318,21 @@ type repoView struct {
 	Branches    int
 	Tags        int
 	Writable    bool
+	Deletable   bool
 	Public      bool
 	Empty       bool
 	Refs        []string
 	MetadataErr bool
 }
 
-func (h *Handler) view(r *http.Request, info repos.Info, writable bool) repoView {
+func (h *Handler) view(r *http.Request, info repos.Info, writable, deletable bool) repoView {
+	view := newRepoView(r, info)
+	view.Writable = writable && !h.public
+	view.Deletable = deletable && !h.public
+	return view
+}
+
+func newRepoView(r *http.Request, info repos.Info) repoView {
 	refs := make([]string, len(info.Refs))
 	for i, ref := range info.Refs {
 		refs[i] = strings.ToValidUTF8(ref, "\uFFFD")
@@ -330,7 +351,6 @@ func (h *Handler) view(r *http.Request, info repos.Info, writable bool) repoView
 		Updated:     relativeTime(info.Latest.When),
 		Branches:    info.Branches,
 		Tags:        info.Tags,
-		Writable:    writable && !h.public,
 		Empty:       info.Empty,
 		Refs:        refs,
 		MetadataErr: info.Err != nil,

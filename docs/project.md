@@ -23,6 +23,8 @@ In scope:
 - Repository creation, listing, and discovery scoped to the tailnet.
 - A read-only discovery web UI that lists the repositories a viewer may read
   and shows each repository's clone URL and latest activity.
+- Deleting a repository from the discovery UI when the viewer has `admin`
+  access, with a typed confirmation and no separate configuration.
 - Running as a single binary on one tailnet node, with no host Tailscale
   daemon and no account system.
 - Optional, read-only public clone of a curated subset of repositories over
@@ -39,8 +41,9 @@ Out of scope:
 - Its own authentication, password, or key management.
 - Browsing code (trees, blobs, diffs, or README rendering), issues, or pull
   requests in the web UI.
-- Creating, renaming, or deleting repositories from the web UI. Those remain
-  the result of an authorized git push.
+- Creating or renaming repositories from the web UI. Creation remains the
+  result of an authorized git push; renaming is a client-side mirror-push plus
+  delete. Deleting a repository is an admin-gated web action.
 - CI/CD. `tsgit` hosts code; it does not test it.
 - Federation or mirroring between tailnets.
 

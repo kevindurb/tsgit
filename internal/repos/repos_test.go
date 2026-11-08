@@ -196,6 +196,150 @@ func TestCreateConcurrent(t *testing.T) {
 	}
 }
 
+func TestDelete(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	path, _ := writeCommit(t, store, "acme/widget", "main", "initial", time.Now())
+
+	if err := store.Delete(context.Background(), "acme/widget"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if store.Exists("acme/widget") {
+		t.Fatal("deleted repository still exists")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted path stat = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "acme")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty namespace still exists: %v", err)
+	}
+	if staged, err := os.ReadDir(filepath.Join(store.Root(), ".tsgit-tmp")); err != nil || len(staged) != 0 {
+		t.Fatalf("staging directory is not clean: %v, %v", staged, err)
+	}
+}
+
+func TestDeleteMissing(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := store.Delete(context.Background(), "acme/missing"); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("Delete missing = %v, want ErrNotExist", err)
+	}
+}
+
+func TestDeleteRefusesSymlink(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root, "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	namespace := filepath.Join(root, "acme")
+	real := filepath.Join(namespace, "real.git")
+	if err := os.MkdirAll(real, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(namespace, "widget.git")
+	if err := os.Symlink("real.git", link); err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.Delete(context.Background(), "acme/widget")
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("Delete symlink = %v, want a symlink refusal", err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink was changed: %v, %v", info, err)
+	}
+	if info, err := os.Stat(real); err != nil || !info.IsDir() {
+		t.Fatalf("symlink target was changed: %v, %v", info, err)
+	}
+}
+
+func TestDeleteLeavesOtherRepositories(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := store.Create(context.Background(), "acme/widget"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(context.Background(), "acme/other"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Delete(context.Background(), "acme/widget"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if store.Exists("acme/widget") {
+		t.Fatal("deleted repository still exists")
+	}
+	if !store.Exists("acme/other") {
+		t.Fatal("neighbouring repository was removed")
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "acme")); err != nil {
+		t.Fatalf("namespace was removed while another repository remained: %v", err)
+	}
+}
+
+func TestDeleteThenRecreate(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	writeCommit(t, store, "acme/widget", "main", "old history", time.Now())
+	if err := store.Delete(context.Background(), "acme/widget"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := store.Create(context.Background(), "acme/widget"); err != nil {
+		t.Fatalf("Create after delete: %v", err)
+	}
+	info, err := store.Info(context.Background(), "acme/widget")
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if !info.Empty || info.Latest.Hash != "" {
+		t.Fatalf("recreated repository kept old history: %+v", info)
+	}
+}
+
+func TestDeleteConcurrentCreate(t *testing.T) {
+	store, err := Open(t.TempDir(), "main")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var wg sync.WaitGroup
+	var createErr, deleteErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, createErr = store.Create(context.Background(), "acme/widget")
+	}()
+	go func() {
+		defer wg.Done()
+		deleteErr = store.Delete(context.Background(), "acme/widget")
+	}()
+	wg.Wait()
+
+	if createErr != nil {
+		t.Fatalf("Create: %v", createErr)
+	}
+	if deleteErr != nil && !errors.Is(deleteErr, ErrNotExist) {
+		t.Fatalf("Delete: %v, want nil or ErrNotExist", deleteErr)
+	}
+	if deleteErr == nil && store.Exists("acme/widget") {
+		t.Fatal("Delete succeeded but the repository exists")
+	}
+	if errors.Is(deleteErr, ErrNotExist) && !store.Exists("acme/widget") {
+		t.Fatal("Delete failed as missing but no repository was created")
+	}
+	if staged, err := os.ReadDir(filepath.Join(store.Root(), ".tsgit-tmp")); err != nil || len(staged) != 0 {
+		t.Fatalf("staging directory is not clean: %v, %v", staged, err)
+	}
+}
+
 func TestOpenCreatesRootAndChecksWritable(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "nested", "repos")
 	store, err := Open(root, "main")

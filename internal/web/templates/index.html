@@ -4,6 +4,8 @@
   {{if .Repos}}<span class="count">{{len .Repos}} readable</span>{{end}}
 </div>
 
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+
 {{if .Repos}}
 <div class="table-wrap">
   <table>
