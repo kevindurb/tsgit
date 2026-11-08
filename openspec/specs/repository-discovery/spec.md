@@ -96,7 +96,9 @@ readable repositories MUST see an empty state rather than an error.
 For a repository the viewer may read, the system MUST render a summary
 containing the description, default branch, latest commit, and clone URL. When
 the repository is empty, the summary MUST show how to push a first commit,
-except for a Funnel request, which MUST NOT show first-push commands. The
+except for a Funnel request, which MUST NOT show first-push commands. When the
+viewer has `admin`, the summary MUST offer a deletion action that links to a
+separate confirmation surface; the summary itself MUST NOT delete anything. The
 summary MUST NOT render file trees, file contents, diffs, commit lists, or
 README content.
 
@@ -129,6 +131,18 @@ README content.
 
 - **WHEN** a Funnel request opens an empty public repository
 - **THEN** the summary identifies it as empty but shows no first-push commands
+
+#### Scenario: Admin sees a deletion action
+
+- **WHEN** the viewer has `admin` on a repository they may read
+- **THEN** the summary offers a deletion action that leads to a separate
+  confirmation surface, and the summary request itself changes nothing
+
+#### Scenario: Writer does not see a deletion action
+
+- **WHEN** the viewer has `write` but not `admin` on a repository they may read
+- **THEN** the summary shows the repository as writable and offers no deletion
+  action
 
 ### Requirement: Denied and missing are indistinguishable
 

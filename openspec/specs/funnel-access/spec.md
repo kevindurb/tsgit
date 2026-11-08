@@ -79,7 +79,7 @@ A Funnel request MUST resolve to a synthetic public principal whose grants are
 read-only and derived only from the node capability. The system MUST NOT call
 `WhoIs` for a Funnel request and MUST NOT derive the principal from the remote
 address, an HTTP header, a query parameter, or a request body. The public
-principal MUST NOT have write or create access under any payload.
+principal MUST NOT have write, create, or delete access under any payload.
 
 #### Scenario: Public clone uses the public principal
 
@@ -103,6 +103,11 @@ principal MUST NOT have write or create access under any payload.
 - **WHEN** a Funnel request names a repository that does not exist
 - **THEN** no repository is created and the response is the same not-found
   result as for an unreadable repository
+
+#### Scenario: Public deletion is denied
+
+- **WHEN** a Funnel request targets the repository deletion surface
+- **THEN** the request is refused as not-found and no repository is changed
 
 ### Requirement: Public surface is clone, fetch, and filtered discovery
 
