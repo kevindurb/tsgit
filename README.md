@@ -6,6 +6,8 @@ Every peer that reaches tsgit is already authenticated by Tailscale. tsgit uses
 that identity to decide who can read and write, so it never runs its own login
 system.
 
+![The tsgit repository index showing example repositories, access badges, and clone URLs](docs/images/repository-index.png)
+
 ## Built with AI
 
 tsgit is built with AI. Coding agents write most of the code, tests, and docs
