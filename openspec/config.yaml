@@ -19,5 +19,7 @@ context: |
   decided before any subprocess starts; `internal/authz` takes an identity and
   a repo, never a connection.
 
-  Out of scope: users outside the tailnet, its own auth, web UI for browsing
-  code, issues/PRs, CI, federation.
+  Out of scope: users outside the tailnet, its own auth, public write, code
+  history, diffs, blame, search, syntax highlighting, file editing,
+  issues/PRs, CI, federation. Read-only trees, blobs, ref selection, and safe
+  README rendering are in scope.

@@ -305,6 +305,70 @@ func TestPublicClientAddrComesFromFunnelConn(t *testing.T) {
 	}
 }
 
+func TestPublicExpensiveClassifier(t *testing.T) {
+	tests := []struct {
+		method string
+		target string
+		want   bool
+	}{
+		{"GET", "/acme/widget/tree", true},
+		{"HEAD", "/acme/widget/tree/docs?ref=main", true},
+		{"GET", "/acme/widget/blob/README.md", true},
+		{"GET", "/acme/widget.git/tree", true},
+		{"GET", "/acme/widget", false},
+		{"GET", "/", false},
+		{"POST", "/acme/widget/tree", false},
+		{"POST", "/acme/widget.git/git-upload-pack", true},
+		{"GET", "/acme/widget/tree/../secret", false},
+		{"GET", "/acme/widget/blob/", false},
+	}
+	for _, tt := range tests {
+		req := httptest.NewRequest(tt.method, tt.target, nil)
+		if got := isPublicExpensive(req); got != tt.want {
+			t.Errorf("isPublicExpensive(%s %s) = %v, want %v", tt.method, tt.target, got, tt.want)
+		}
+	}
+}
+
+func TestPublicBrowsingConcurrencyLimit(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	handler := publicSurface(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(started) })
+		<-release
+		_, _ = io.WriteString(w, "ok")
+	}), 1, testLogger(io.Discard))
+
+	firstDone := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/widget/tree", nil))
+		firstDone <- rec.Code
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first browsing request never started")
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/widget/tree", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("saturated browsing limiter status = %d, want 503", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("saturated browsing limiter response has no Retry-After")
+	}
+
+	close(release)
+	if code := <-firstDone; code != http.StatusOK {
+		t.Fatalf("first browsing request = %d, want 200", code)
+	}
+}
+
 func TestPublicServerDrainsInFlightRequest(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -289,9 +289,11 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// Commit is the latest commit visible on a repository's refs.
+// Commit is a commit's header metadata. Ref names the ref a browsing request
+// resolved, when there was one; it is empty for metadata read outside browsing.
 type Commit struct {
 	Hash    string
+	Ref     string
 	Subject string
 	When    time.Time
 }

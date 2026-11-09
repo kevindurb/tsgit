@@ -1,0 +1,38 @@
+{{define "content"}}
+<nav class="crumbs">
+  {{range $i, $crumb := .Crumbs}}{{if $i}}<span>/</span>{{end}}<a href="{{$crumb.Href}}">{{$crumb.Name}}</a>{{end}}
+</nav>
+
+<div class="page-head">
+  <h1>{{.Blob.Name}}</h1>
+  <span class="badge">read</span>
+</div>
+
+<div class="commit-head">
+  <code>{{.ShortHash}}</code>
+  <span>{{.Commit.Subject}}</span>
+  {{if .Commit.When}}<span class="muted">{{.Commit.When}}</span>{{end}}
+</div>
+
+<div class="blob-meta">
+  <span><code>{{.Blob.Mode}}</code></span>
+  {{if .Blob.Size}}<span>{{.Blob.Size}}</span>{{end}}
+  {{if .Blob.Hash}}<span class="muted"><code>{{.Blob.Hash}}</code></span>{{end}}
+</div>
+
+{{if .Parent}}<p class="parent-link"><a href="{{.Parent}}">Parent directory</a></p>{{end}}
+
+{{if .Blob.TooLarge}}
+<p class="notice">This file is too large to display.</p>
+{{else if .Blob.Binary}}
+<p class="notice">This file is binary and is not displayed.</p>
+{{else if .Blob.Submodule}}
+<p class="notice">Submodule at commit <code>{{.Blob.Hash}}</code>.</p>
+{{else if .Blob.Symlink}}
+<p class="notice">Symbolic link to <code>{{.Blob.LinkTarget}}</code>. The target is not read.</p>
+{{else if .Blob.Empty}}
+<pre class="blob empty-blob"><code></code></pre>
+{{else}}
+<pre class="blob"><code>{{.Blob.Text}}</code></pre>
+{{end}}
+{{end}}

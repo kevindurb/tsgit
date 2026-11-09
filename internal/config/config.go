@@ -67,7 +67,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&cfg.ControlURL, "control-url", cfg.ControlURL, "coordination server URL")
 	fs.BoolVar(&cfg.HTTPS, "https", cfg.HTTPS, "serve HTTPS when the tailnet permits it")
 	fs.BoolVar(&cfg.Funnel, "funnel", cfg.Funnel, "publish read-only repositories through Tailscale Funnel")
-	fs.IntVar(&cfg.FunnelMaxConcurrent, "funnel-max-concurrent", cfg.FunnelMaxConcurrent, "maximum concurrent public pack exchanges")
+	fs.IntVar(&cfg.FunnelMaxConcurrent, "funnel-max-concurrent", cfg.FunnelMaxConcurrent, "maximum concurrent public git operations (pack exchanges and browsing reads)")
 	fs.StringVar(&cfg.DefaultBranch, "default-branch", cfg.DefaultBranch, "initial branch of created repositories")
 	fs.StringVar(&cfg.DevListen, "dev-listen", cfg.DevListen, "localhost address for development mode")
 	fs.StringVar(&cfg.Log, "log", cfg.Log, "log level: debug, info, warn, error")

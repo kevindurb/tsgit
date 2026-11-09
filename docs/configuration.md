@@ -15,7 +15,7 @@ win over the environment. Defaults are shown for the `serve` command.
 | `--control-url` | `TS_CONTROL_URL` | hosted control plane | Coordination server URL |
 | `--https` | `TSGIT_HTTPS` | `true` | Serve TLS when the tailnet permits it |
 | `--funnel` | `TSGIT_FUNNEL` | `false` | Open a read-only public listener through Tailscale Funnel |
-| `--funnel-max-concurrent` | `TSGIT_FUNNEL_MAX_CONCURRENT` | `4` | Maximum concurrent public pack exchanges; must be positive |
+| `--funnel-max-concurrent` | `TSGIT_FUNNEL_MAX_CONCURRENT` | `4` | Maximum concurrent public git operations (pack exchanges and browsing reads); must be positive |
 | `--default-branch` | `TSGIT_DEFAULT_BRANCH` | `main` | Initial branch of created repositories |
 | `--dev-listen` | `TSGIT_DEV_LISTEN` | empty | Localhost address for development mode |
 | `--log` | `TSGIT_LOG` | `info` | `debug`, `info`, `warn`, or `error` |
@@ -60,11 +60,11 @@ hostname and normal client ergonomics.
 ## Public listener (Funnel)
 
 `--funnel` is off by default. It opens a second, public listener through
-Tailscale Funnel serving only clone/fetch and the filtered discovery pages.
-Three independent keys are required before anything is published: `--funnel`,
-the tailnet `funnel` node attribute, and a non-empty `cap/funnel` payload under
-the node's `nodeAttrs.app`. None of them alone exposes a repository. The payload
-contract is in `docs/access-control.md`.
+Tailscale Funnel serving only clone/fetch and the filtered discovery and
+browsing pages. Three independent keys are required before anything is
+published: `--funnel`, the tailnet `funnel` node attribute, and a non-empty
+`cap/funnel` payload under the node's `nodeAttrs.app`. None of them alone
+exposes a repository. The payload contract is in `docs/access-control.md`.
 
 Funnel needs HTTPS certificate domains, so it is opened only when the node has
 the `https` and `funnel` capabilities and a certificate domain. If any
@@ -81,14 +81,15 @@ The public server is deliberately stricter than the tailnet server:
 | `WriteTimeout` | none | large clones are legitimate |
 | `MaxHeaderBytes` | `1 MiB` | cheap header ceiling |
 | request body | `64 MiB` | fetch negotiation is small |
-| concurrent pack POSTs | `--funnel-max-concurrent` (`4`) | CPU, disk, and Funnel bandwidth |
+| concurrent public git operations | `--funnel-max-concurrent` (`4`) | CPU, disk, and Funnel bandwidth |
 
 A declared `Content-Length` over the body limit is refused with `413` before a
 backend starts. A chunked body is bounded by the same limit while it is read. A
-public `POST .../git-upload-pack` that finds every slot busy is refused with
-`503` and `Retry-After`; it is never queued. The public client's source address
-comes from `FunnelConn.Src` and is logged with the `funnel` principal; it is
-never used for authorization.
+public `POST .../git-upload-pack` or a public tree/blob read that finds every
+slot busy is refused with `503` and `Retry-After`; it is never queued. Browsing
+reads are also bounded by the repository read timeouts and the file/README size
+caps. The public client's source address comes from `FunnelConn.Src` and is
+logged with the `funnel` principal; it is never used for authorization.
 
 ## Development mode
 

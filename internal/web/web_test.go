@@ -31,6 +31,47 @@ type fakeStore struct {
 	infoErr   map[string]error
 	deleteErr error
 	deleted   []string
+
+	onResolveRef func(name, ref string) (repos.Commit, error)
+	onCommit     func(name, commit string) (repos.Commit, error)
+	onTree       func(name, commit, path string) ([]repos.Entry, error)
+	onBlob       func(name, commit, path string) (repos.Blob, error)
+	onReadme     func(name, commit string) (repos.Blob, bool, error)
+}
+
+func (f *fakeStore) ResolveRef(_ context.Context, name, ref string) (repos.Commit, error) {
+	if f.onResolveRef != nil {
+		return f.onResolveRef(name, ref)
+	}
+	return repos.Commit{}, repos.ErrNotExist
+}
+
+func (f *fakeStore) Commit(_ context.Context, name, commit string) (repos.Commit, error) {
+	if f.onCommit != nil {
+		return f.onCommit(name, commit)
+	}
+	return repos.Commit{}, repos.ErrNotExist
+}
+
+func (f *fakeStore) Tree(_ context.Context, name, commit, path string) ([]repos.Entry, error) {
+	if f.onTree != nil {
+		return f.onTree(name, commit, path)
+	}
+	return nil, repos.ErrNotExist
+}
+
+func (f *fakeStore) Blob(_ context.Context, name, commit, path string) (repos.Blob, error) {
+	if f.onBlob != nil {
+		return f.onBlob(name, commit, path)
+	}
+	return repos.Blob{}, repos.ErrNotExist
+}
+
+func (f *fakeStore) Readme(_ context.Context, name, commit string) (repos.Blob, bool, error) {
+	if f.onReadme != nil {
+		return f.onReadme(name, commit)
+	}
+	return repos.Blob{}, false, nil
 }
 
 func (f *fakeStore) List(context.Context) ([]repos.Info, error) {

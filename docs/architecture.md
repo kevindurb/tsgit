@@ -80,9 +80,9 @@ or spawn git.
 | `internal/config` | Flags, environment fallbacks, validation, dev root | stdlib, `ipn` |
 | `internal/identity` | Resolve a peer address, or the public node capability, to an `authz.Identity` | LocalAPI, `tailcfg` |
 | `internal/authz` | Pure read/write/create/delete decision | stdlib only |
-| `internal/repos` | Canonical names, containment, metadata reads, atomic creation and deletion | a root directory, `git` |
+| `internal/repos` | Canonical names, containment, metadata and browsing reads, atomic creation and deletion | a root directory, `git` |
 | `internal/transport` | Smart-HTTP routing and framing, backend seam | `identity`, `authz`, `repos` |
-| `internal/web` | Read-only discovery pages plus the admin deletion handler | `identity`, `authz`, `repos` |
+| `internal/web` | Read-only discovery, code browsing, Markdown rendering, and the admin deletion handler | `identity`, `authz`, `repos` |
 
 Dependency arrows point one way. `transport` and `web` are the only layers that
 know about a network request; `identity` is the only layer that knows about
@@ -90,8 +90,9 @@ Tailscale.
 
 ## HTTP surface
 
-The tailnet listener serves three surfaces: git smart HTTP, discovery, and
-deletion. The git handler serves exactly four smart-HTTP endpoints:
+The tailnet listener serves three surfaces: git smart HTTP, discovery and
+browsing, and deletion. The git handler serves exactly four smart-HTTP
+endpoints:
 
 | Method | Path | Operation |
 |---|---|---|
@@ -130,7 +131,10 @@ The tailnet and public listeners serve a read-only HTML front end:
 | Method | Path | Page |
 |---|---|---|
 | GET | `/` | repository index |
-| GET | `/<ns>/<repo>` | repository summary |
+| GET | `/<ns>/<repo>` | repository summary, with the HEAD README |
+| GET | `/<ns>/<repo>/tree[?ref=<ref>]` | directory listing |
+| GET | `/<ns>/<repo>/tree/<path...>?ref=<ref>` | directory listing |
+| GET | `/<ns>/<repo>/blob/<path...>?ref=<ref>` | file view |
 | GET | `/<ns>/<repo>.git` | redirect to the summary |
 | GET | `/.tsgit/web.css`, `/.tsgit/favicon.svg` | embedded assets |
 
@@ -144,6 +148,29 @@ Metadata comes from `internal/repos`: the `description` file, `HEAD`, and one
 read-only `git for-each-ref` per repository for the latest commit and ref
 counts. Each git call is bounded by a timeout, and one unreadable repository
 degrades to a name-only row instead of failing the page.
+
+### Code browsing
+
+The tree and blob routes resolve the viewer and `OpRead` before any path work or
+git process. An absent `ref` means `HEAD`. A ref may be a branch, a tag, a full
+`refs/heads/...` or `refs/tags/...` name, or a full 40- or 64-hex commit ID;
+annotated tags are peeled and non-commit objects are refused. The selected ref is
+resolved to a commit once, and every read for that page uses that commit.
+
+`internal/repos` adds focused reads: `ResolveRef`, `Tree`, `Blob`, `Commit`, and
+`Readme`. Tree listings use `git cat-file -t` to distinguish a directory and
+`git ls-tree -z -l` to list it, so filenames with spaces, tabs, newlines, and
+Unicode survive. Blobs are sized before reading and are capped; text is
+normalized to UTF-8, a NUL byte marks a binary file, and symlinks and submodules
+are identified rather than followed. Path components are validated as git tree
+paths, never joined to the repository directory.
+
+The summary renders the README at `HEAD`; a tree root renders the README at its
+selected commit. Markdown uses `github.com/yuin/goldmark` in safe mode with raw
+HTML disabled. An AST transform allows `http`, `https`, `mailto`, and
+in-repository relative links, rewrites relative links to browsing routes with
+the current ref, and degrades absolute, escaping, unsupported-scheme, and image
+destinations to text. The CSP is unchanged.
 
 Pages are self-contained: `html/template` and `go:embed`, no JavaScript, no
 external assets, and a restrictive content security policy. Light and dark
@@ -207,7 +234,8 @@ The public handler is a separate composition:
 | Principal | peer node, login, tags, grants | synthetic `funnel`, read-only grants |
 | Services | upload-pack, receive-pack | upload-pack only |
 | Discovery | viewer's authorized view | public subset, no write affordances |
-| Limits | header timeout | header/read/idle timeouts, 1 MiB headers, 64 MiB bodies, 4 concurrent packs |
+| Browsing | trees, blobs, refs, README | same pages, read-only principal |
+| Limits | header timeout | header/read/idle timeouts, 1 MiB headers, 64 MiB bodies, shared concurrency cap for packs and browsing |
 
 Public requests never call `WhoIs`. The client address is taken from
 `FunnelConn.Src` for access logs only; `Conn.RemoteAddr` is the Funnel relay and
@@ -317,8 +345,8 @@ up to ten seconds.
 
 ## Deferred
 
-SSH transport, running against a host `tailscaled`, Tailscale Service mode, code
-browsing in the web UI (trees, blobs, diffs, README rendering), ref-level
-permissions, public write or public accounts, audience control over public
-repositories, and a go-git backend are out of scope for this slice. Each is a
-separate front end, trust boundary, or measured replacement decision.
+SSH transport, running against a host `tailscaled`, Tailscale Service mode,
+commit history, diffs, blame, search, syntax highlighting, file editing,
+ref-level permissions, public write or public accounts, audience control over
+public repositories, and a go-git backend are out of scope for this slice. Each
+is a separate front end, trust boundary, or measured replacement decision.

@@ -44,7 +44,7 @@ git push -u origin {{if .Repo.Branch}}{{.Repo.Branch}}{{else}}main{{end}}</code>
 {{else}}
 <dl class="meta">
   <dt>Default branch</dt>
-  <dd>{{if .Repo.Branch}}<code>{{.Repo.Branch}}</code>{{else}}<span class="muted">detached HEAD</span>{{end}}</dd>
+  <dd>{{if .Repo.Branch}}<a href="{{.Repo.TreePath}}"><code>{{.Repo.Branch}}</code></a>{{else}}<span class="muted">detached HEAD</span>{{end}}</dd>
 
   <dt>Latest commit</dt>
   <dd>
@@ -58,4 +58,7 @@ git push -u origin {{if .Repo.Branch}}{{.Repo.Branch}}{{else}}main{{end}}</code>
   <dd>{{.Repo.Tags}}</dd>
 </dl>
 {{end}}
+
+{{if .Readme}}<section class="readme markdown">{{.Readme}}</section>{{end}}
+{{if .ReadmeNotice}}<p class="notice">{{.ReadmeNotice}}</p>{{end}}
 {{end}}

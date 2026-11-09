@@ -6,7 +6,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -25,6 +24,11 @@ import (
 type RepositoryStore interface {
 	List(ctx context.Context) ([]repos.Info, error)
 	Info(ctx context.Context, name string) (repos.Info, error)
+	ResolveRef(ctx context.Context, name, ref string) (repos.Commit, error)
+	Commit(ctx context.Context, name, commit string) (repos.Commit, error)
+	Tree(ctx context.Context, name, commit, path string) ([]repos.Entry, error)
+	Blob(ctx context.Context, name, commit, path string) (repos.Blob, error)
+	Readme(ctx context.Context, name, commit string) (repos.Blob, bool, error)
 }
 
 // Config wires a discovery handler.
@@ -54,6 +58,8 @@ type Handler struct {
 
 	indexTmpl *template.Template
 	repoTmpl  *template.Template
+	treeTmpl  *template.Template
+	blobTmpl  *template.Template
 	errorTmpl *template.Template
 }
 
@@ -72,6 +78,8 @@ func New(cfg Config) *Handler {
 		public:         cfg.Public,
 		indexTmpl:      parsePage(indexHTML),
 		repoTmpl:       parsePage(repoHTML),
+		treeTmpl:       parsePage(treeHTML),
+		blobTmpl:       parsePage(blobHTML),
 		errorTmpl:      parsePage(errorHTML),
 	}
 }
@@ -195,57 +203,7 @@ func (h *Handler) publicView(r *http.Request) (authz.Identity, bool) {
 }
 
 func (h *Handler) servePath(w http.ResponseWriter, r *http.Request, id authz.Identity) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		h.renderError(w, r, http.StatusNotFound, "Not found", "No page exists at this address.")
-		return
-	}
-
-	name, err := repos.ParseName(parts[0] + "/" + parts[1])
-	if err != nil {
-		h.renderError(w, r, http.StatusNotFound, "Not found", "No page exists at this address.")
-		return
-	}
-	if strings.HasSuffix(parts[1], ".git") {
-		http.Redirect(w, r, repoPath(name), http.StatusMovedPermanently)
-		return
-	}
-
-	decision := authz.Decide(id, name, authz.OpRead)
-	if !decision.Allow {
-		h.log.Info("access denied", "node", id.Node, "repo", name, "reason", decision.Reason)
-		h.renderError(w, r, http.StatusNotFound, "Not found", "No page exists at this address.")
-		return
-	}
-
-	info, err := h.store.Info(r.Context(), name)
-	if errors.Is(err, repos.ErrNotExist) {
-		h.renderError(w, r, http.StatusNotFound, "Not found", "No page exists at this address.")
-		return
-	}
-	metadataErr := info.Err != nil
-	if err != nil {
-		metadataErr = true
-		h.log.Warn("repository metadata unavailable", "repo", name, "error", err)
-	}
-	if info.Name == "" {
-		info.Name = name
-	}
-	if info.Err != nil {
-		h.log.Warn("repository metadata unavailable", "repo", info.Name, "error", info.Err)
-	}
-
-	view := h.view(r, info, decision.CanCreate, decision.CanDelete)
-	view.MetadataErr = metadataErr
-	h.render(w, r, http.StatusOK, h.repoTmpl, repoPage{
-		pageData: pageData{
-			Title:    view.Name,
-			Version:  h.version,
-			Identity: identityLabel(id),
-			Public:   h.public,
-		},
-		Repo: view,
-	})
+	h.serveRepositoryPath(w, r, id)
 }
 
 func (h *Handler) renderError(w http.ResponseWriter, r *http.Request, status int, title, message string) {
@@ -299,7 +257,9 @@ type indexPage struct {
 
 type repoPage struct {
 	pageData
-	Repo repoView
+	Repo         repoView
+	Readme       template.HTML
+	ReadmeNotice string
 }
 
 type errorPage struct {
@@ -310,6 +270,7 @@ type errorPage struct {
 type repoView struct {
 	Name        string
 	Path        string
+	TreePath    string
 	CloneURL    string
 	Description string
 	Branch      string
@@ -340,6 +301,7 @@ func newRepoView(r *http.Request, info repos.Info) repoView {
 	return repoView{
 		Name:        strings.ToValidUTF8(info.Name, "\uFFFD"),
 		Path:        repoPath(info.Name),
+		TreePath:    repoPath(info.Name) + "/tree",
 		CloneURL:    cloneURL(r, info.Name),
 		Description: strings.ToValidUTF8(info.Description, "\uFFFD"),
 		Branch:      strings.ToValidUTF8(info.Branch, "\uFFFD"),

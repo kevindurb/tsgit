@@ -15,15 +15,17 @@ under human direction, and a human reviews every change.
 
 ## Status
 
-Early, but usable. tsgit serves git over smart HTTP and shows a read-only
-repository index. SSH, code browsing, issues, pull requests, and CI are not
-implemented.
+Early, but usable. tsgit serves git over smart HTTP, shows a read-only
+repository index, and provides a read-only code browser with safe README
+rendering. SSH, issues, pull requests, and CI are not implemented.
 
 ## What it does
 
 - Serves `git clone`, `fetch`, and `push` over smart HTTP to tailnet peers.
 - Creates a repository on an authorized first push.
 - Lists the repositories you can read at `https://<hostname>/`.
+- Browses directory trees and file contents, selects branches, tags, or commit
+  IDs, and renders each repository's README safely.
 - Deletes a repository from the web UI for viewers with `admin` access.
 - Authorizes from Tailscale identity and ACL tags. There is no user database.
 - Optionally publishes a policy-selected, read-only subset to the internet
@@ -116,7 +118,9 @@ mounts, auth-key files, upgrades, and arm64, see
 ## Use it
 
 Open the index at `https://tsgit/` (MagicDNS). It lists the repositories you may
-read and marks whether you may push. To clone:
+read and marks whether you may push. Open a repository to browse its default
+branch, select another branch, tag, or commit, read a file, or read its README.
+To clone:
 
 ```sh
 git clone https://tsgit/acme/widget.git
@@ -187,12 +191,13 @@ The public URL is the node's DNS name:
 git clone https://tsgit.<tailnet>.ts.net/public/widget.git
 ```
 
-Only clone/fetch and the filtered index are public. Receive-pack,
-push-to-create, and every mutation return `404`; the payload has no access
-field, so public write is impossible. If a prerequisite is missing, `tsgit`
-logs an error and keeps serving the tailnet. See
-[`docs/access-control.md`](docs/access-control.md) and
-[`docs/deployment.md`](docs/deployment.md).
+Only clone/fetch and the read-only discovery and browsing pages are public.
+Receive-pack, push-to-create, and every mutation return `404`; the payload has no
+access field, so public write is impossible. Public browsing reads share the
+pack-exchange concurrency budget and are bounded by the same timeouts and size
+caps as the tailnet view. If a prerequisite is missing, `tsgit` logs an error and
+keeps serving the tailnet. See [`docs/access-control.md`](docs/access-control.md)
+and [`docs/deployment.md`](docs/deployment.md).
 
 ## Local development
 

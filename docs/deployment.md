@@ -131,16 +131,18 @@ The public clone URL is the node's DNS name plus the ordinary repository path:
 git clone https://tsgit.example-tailnet.ts.net/public/widget.git
 ```
 
-Only `git-upload-pack` and the filtered discovery pages are served publicly.
-Receive-pack, push-to-create, and every mutation return the same not-found
-response as an unreadable repository. The payload has no access level, so public
-write is impossible by contract.
+Only `git-upload-pack` and the filtered discovery and browsing pages are served
+publicly. Receive-pack, push-to-create, and every mutation return the same
+not-found response as an unreadable repository. The payload has no access level,
+so public write is impossible by contract.
 
 Public requests are bounded: 10s header timeout, 60s read and idle timeouts, a
 1 MiB header ceiling, a 64 MiB request body, and at most
-`--funnel-max-concurrent` (default 4) concurrent pack exchanges. An exhausted
-limit returns `503` with `Retry-After`; a declared body over the limit returns
-`413`. See `docs/configuration.md` for the full table.
+`--funnel-max-concurrent` (default 4) concurrent public git operations — pack
+exchanges and browsing reads share the cap. An exhausted limit returns `503`
+with `Retry-After`; a declared body over the limit returns `413`. Browsing reads
+also use the repository read timeouts and the file/README size caps. See
+`docs/configuration.md` for the full table.
 
 If Funnel is requested but a prerequisite is missing or the public listener
 cannot bind, `tsgit` logs an error and keeps serving the tailnet only. Removing

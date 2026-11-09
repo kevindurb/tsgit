@@ -16,6 +16,8 @@ var (
 	baseHTML   = mustRead("templates/base.html")
 	indexHTML  = mustRead("templates/index.html")
 	repoHTML   = mustRead("templates/repo.html")
+	treeHTML   = mustRead("templates/tree.html")
+	blobHTML   = mustRead("templates/blob.html")
 	deleteHTML = mustRead("templates/delete.html")
 	errorHTML  = mustRead("templates/error.html")
 	webCSS     = mustRead("static/web.css")

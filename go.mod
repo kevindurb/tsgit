@@ -2,7 +2,10 @@ module github.com/kevindurb/tsgit
 
 go 1.27.3
 
-require tailscale.com v1.104.5
+require (
+	github.com/yuin/goldmark v1.8.7
+	tailscale.com v1.104.5
+)
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect

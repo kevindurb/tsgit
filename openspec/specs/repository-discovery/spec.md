@@ -2,8 +2,8 @@
 
 ## Purpose
 Give a tailnet user a read-only way to discover which repositories they can
-reach and how to clone them, without adding accounts, sessions, or code
-browsing.
+reach, how to clone them, and what is inside them, without adding accounts,
+sessions, or a write-capable web surface.
 
 ## Requirements
 

@@ -1,0 +1,56 @@
+{{define "content"}}
+<nav class="crumbs">
+  {{range $i, $crumb := .Crumbs}}{{if $i}}<span>/</span>{{end}}<a href="{{$crumb.Href}}">{{$crumb.Name}}</a>{{end}}
+</nav>
+
+<div class="page-head">
+  <h1>{{.Name}}</h1>
+  <span class="badge">read</span>
+</div>
+
+<div class="commit-head">
+  <code>{{.ShortHash}}</code>
+  <span>{{.Commit.Subject}}</span>
+  {{if .Commit.When}}<span class="muted">{{.Commit.When}}</span>{{end}}
+</div>
+
+<form class="ref-switcher" method="get" action="{{.FormAction}}">
+  <label for="ref">Ref</label>
+  <select id="ref" name="ref">
+    {{range .Refs}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select>
+  <button class="button" type="submit">Go</button>
+</form>
+
+{{if .Parent}}<p class="parent-link"><a href="{{.Parent}}">Parent directory</a></p>{{end}}
+
+{{if .Entries}}
+<div class="table-wrap">
+  <table class="tree">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Type</th>
+        <th scope="col">Size</th>
+        <th scope="col">Mode</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Entries}}
+      <tr>
+        <td class="name-cell"><a href="{{.Href}}">{{.Name}}</a></td>
+        <td data-label="Type">{{.Kind}}</td>
+        <td data-label="Size">{{if .Size}}{{.Size}}{{else}}<span class="muted">&mdash;</span>{{end}}</td>
+        <td data-label="Mode"><code>{{.Mode}}</code></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty"><p>This directory is empty.</p></div>
+{{end}}
+
+{{if .Readme}}<section class="readme markdown">{{.Readme}}</section>{{end}}
+{{if .ReadmeNotice}}<p class="notice">{{.ReadmeNotice}}</p>{{end}}
+{{end}}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/kevindurb/tsgit/internal/authz"
 	"github.com/kevindurb/tsgit/internal/transport"
+	"github.com/kevindurb/tsgit/internal/web"
 )
 
 // Public listener limits. They are deliberately stricter than the tailnet
@@ -68,8 +69,9 @@ func publicClientAddrFromContext(ctx context.Context) string {
 	return addr
 }
 
-// publicSurface bounds request bodies, caps concurrent pack exchanges, and logs
-// the public principal with the client address from the connection context.
+// publicSurface bounds request bodies, caps concurrent public git operations,
+// and logs the public principal with the client address from the connection
+// context. Pack exchanges and git-backed browsing reads share one budget.
 func publicSurface(next http.Handler, maxConcurrent int, logger *slog.Logger) http.Handler {
 	slots := make(chan struct{}, maxConcurrent)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,18 +88,24 @@ func publicSurface(next http.Handler, maxConcurrent int, logger *slog.Logger) ht
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, publicMaxBodyBytes)
 		}
-		if isPublicPackPOST(r) {
+		if isPublicExpensive(r) {
 			select {
 			case slots <- struct{}{}:
 				defer func() { <-slots }()
 			default:
 				w.Header().Set("Retry-After", publicRetryAfter)
-				http.Error(w, "public pack limit reached", http.StatusServiceUnavailable)
+				http.Error(w, "public operation limit reached", http.StatusServiceUnavailable)
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isPublicExpensive reports whether r is a pack exchange or a git-backed
+// browsing read, both of which cost a process and disk I/O.
+func isPublicExpensive(r *http.Request) bool {
+	return isPublicPackPOST(r) || web.IsBrowsingPath(r)
 }
 
 func isPublicPackPOST(r *http.Request) bool {
