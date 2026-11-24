@@ -27,13 +27,14 @@ rendering. SSH, issues, pull requests, and CI are not implemented.
 - Browses directory trees and file contents, selects branches, tags, or commit
   IDs, and renders each repository's README safely.
 - Deletes a repository from the web UI for viewers with `admin` access.
+- Notifies external CI over the tailnet after a push moves refs (webhooks).
 - Authorizes from Tailscale identity and ACL tags. There is no user database.
 - Optionally publishes a policy-selected, read-only subset to the internet
   through Tailscale Funnel.
 
 It does not serve users outside the tailnet except read-only Funnel repositories
 that tailnet policy designates, run its own authentication, or act as a CI
-system.
+system (it can only tell your CI that a push happened).
 
 ## Requirements
 
@@ -159,6 +160,53 @@ not. Old clone URLs stop working once the old name is deleted.
 
 If HTTPS is unavailable, the node serves plain HTTP on port 80, so use
 `http://tsgit/`. WireGuard still encrypts the traffic.
+
+## Webhooks (CI notification)
+
+After a push moves refs — including push-to-create and branch deletions —
+tsgit can POST a GitHub-shaped `push` event to HTTP endpoints you configure in
+the tailnet policy. Delivery is a notification, not a pipeline: tsgit never
+runs, schedules, or gates CI. Your CI picks the event up and clones; the clone
+URL in the payload points back at the tsgit node.
+
+Hooks live on the `tsgit` node itself, alongside `cap/funnel`:
+
+```json
+"nodeAttrs": [{
+  "target": ["tag:tsgit"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/hooks": [
+      {"repos": ["acme/*"], "url": "http://tekton.tools.ts.net:8080/hook"},
+      {"repos": ["acme/*"], "url": "https://ci.internal/hook", "secretEnv": "TSGIT_HOOK_CI"}
+    ]
+  }
+}]
+```
+
+- **`repos`** — `path.Match` patterns against the canonical `namespace/repo`.
+- **`url`** — `http` or `https` only; delivery goes through the tsnet node,
+  never the host network. Scope the receiver with an ACL (e.g. only
+  `tag:tsgit` may reach its port), since any tailnet node that can connect can
+  trigger it.
+- **`secretEnv`** — optional. Names an environment variable holding an
+  HMAC-SHA256 key; deliveries then carry `X-Hub-Signature-256`, which Tekton's
+  GitHub interceptor verifies with `secretRef`. The policy never holds the
+  secret value. If the variable is set but empty, delivery fails closed. Omit
+  `secretEnv` to deliver unsigned and let the tailnet ACL authenticate the
+  caller — Tekton's CEL interceptor or no interceptor works without one.
+
+Payload: `ref`, `before`, `after`, `created`, `deleted`, `forced`,
+`repository.{name, full_name, clone_url}`, `pusher.name`, plus `X-GitHub-Event:
+push` and `X-GitHub-Delivery: <uuid>`. One delivery per changed ref. Pushes
+rejected before refs move produce nothing.
+
+Delivery is best-effort: up to 3 attempts with short backoff, bounded
+concurrency, one POST per changed ref, no persistence, no ordering guarantees,
+and nothing that can block or fail your push. Editing the policy takes effect
+on the next push — no restart. Push-to-create and deletions are covered;
+repository deletion via the web UI is not. See
+[`docs/access-control.md`](docs/access-control.md) for the full contract and
+[ADR 0005](docs/decisions/0005-webhook-delivery.md) for the rationale.
 
 ## Public read-only access (Funnel)
 
