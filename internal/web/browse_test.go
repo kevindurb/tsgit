@@ -409,3 +409,143 @@ func TestPublicBrowsingHidesWriteAffordances(t *testing.T) {
 		t.Fatalf("public README relative link missing:\n%s", body)
 	}
 }
+
+func TestIconFor(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry repos.Entry
+		want  string
+	}{
+		{"dir", repos.Entry{Name: "docs", Dir: true}, "folder"},
+		{"submodule", repos.Entry{Name: "sub", Submodule: true}, "submodule"},
+		{"symlink", repos.Entry{Name: "link", Symlink: true}, "symlink"},
+		{"executable", repos.Entry{Name: "run.sh", Executable: true}, "executable"},
+		{"executable beats extension", repos.Entry{Name: "deploy.py", Executable: true}, "executable"},
+		{"doc markdown", repos.Entry{Name: "README.md"}, "doc"},
+		{"doc adoc", repos.Entry{Name: "GUIDE.ADOC"}, "doc"},
+		{"doc txt", repos.Entry{Name: "notes.txt"}, "doc"},
+		{"code go", repos.Entry{Name: "main.go"}, "code"},
+		{"code ts", repos.Entry{Name: "app.tsx"}, "code"},
+		{"code header", repos.Entry{Name: "thing.hpp"}, "code"},
+		{"code shell", repos.Entry{Name: "build.sh"}, "code"},
+		{"image png", repos.Entry{Name: "logo.PNG"}, "image"},
+		{"image svg", repos.Entry{Name: "diagram.svg"}, "image"},
+		{"archive tgz", repos.Entry{Name: "release.tar.gz"}, "archive"},
+		{"archive xz", repos.Entry{Name: "release.tar.xz"}, "archive"},
+		{"config yaml", repos.Entry{Name: "ci.YAML"}, "config"},
+		{"config toml", repos.Entry{Name: "settings.toml"}, "config"},
+		{"pdf", repos.Entry{Name: "manual.pdf"}, "pdf"},
+		{"markup html", repos.Entry{Name: "index.html"}, "markup"},
+		{"markup css", repos.Entry{Name: "site.css"}, "markup"},
+		{"lockfile package-lock", repos.Entry{Name: "package-lock.json"}, "lockfile"},
+		{"lockfile yarn", repos.Entry{Name: "yarn.lock"}, "lockfile"},
+		{"lockfile go.sum", repos.Entry{Name: "go.sum"}, "lockfile"},
+		{"lockfile beats json ext", repos.Entry{Name: "pnpm-lock.yaml"}, "lockfile"},
+		{"dotfile gitignore", repos.Entry{Name: ".GitIgnore"}, "dotfile"},
+		{"dotfile env", repos.Entry{Name: ".env"}, "dotfile"},
+		{"unknown extension", repos.Entry{Name: "data.bin"}, "file"},
+		{"no extension", repos.Entry{Name: "Makefile"}, "file"},
+		{"leading dot only", repos.Entry{Name: ".hidden"}, "file"},
+		{"dir dots", repos.Entry{Name: "..."}, "file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := iconFor(tc.entry); got != tc.want {
+				t.Errorf("iconFor(%+v) = %q, want %q", tc.entry, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTreeListingIconsAndParentRow(t *testing.T) {
+	body := request(newTestHandler(t, readerIdentity(), browseStore()), "GET", "/acme/widget/tree").Body.String()
+
+	for _, want := range []string{
+		`<svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg></td>`, // smoke: sprite use renders
+		`href="/acme/widget/blob/README.md"`,
+		`icon-doc`,
+		`icon-markup`,
+		`icon-submodule`,
+		`icon-symlink`,
+		`icon-executable`,
+		`visually-hidden">directory: </span>docs/`,
+		`visually-hidden">file: </span>bin.dat`,
+		`id="icon-file"`,
+		`id="icon-folder"`,
+		`id="icon-symlink"`,
+		`id="icon-submodule"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("root tree page missing %q", want)
+		}
+	}
+	if strings.Contains(body, `href="/acme/widget/tree/docs/"`) {
+		t.Error("directory href must not carry the trailing slash")
+	}
+
+	for _, unwanted := range []string{
+		`<th scope="col">Type</th>`,
+		`data-label="Type"`,
+		`parent-link`,
+		`Parent directory`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("root tree page unexpectedly contains %q", unwanted)
+		}
+	}
+	if strings.Contains(body, `href="../"`) {
+		t.Error("root tree page must not render a parent row")
+	}
+	if strings.Contains(body, ">../</a>") {
+		t.Error("root tree page must not render a ../ row")
+	}
+}
+
+func TestTreeListingParentRow(t *testing.T) {
+	body := request(newTestHandler(t, readerIdentity(), browseStore()), "GET", "/acme/widget/tree/docs?ref=feature").Body.String()
+
+	wantHref := `href="/acme/widget/tree?ref=feature">../</a>`
+	if !strings.Contains(body, wantHref) {
+		t.Errorf("nested tree page missing parent row with ref-carrying href %q:\n%s", wantHref, body)
+	}
+	if !strings.Contains(body, `icon-folder`) {
+		t.Error("parent row should use the folder icon")
+	}
+}
+
+func TestEmptyNonRootTreeRendersParentRow(t *testing.T) {
+	store := browseStore()
+	base := store.onTree
+	store.onTree = func(name, commit, path string) ([]repos.Entry, error) {
+		if path == "emptydir" {
+			return []repos.Entry{}, nil
+		}
+		return base(name, commit, path)
+	}
+	body := request(newTestHandler(t, readerIdentity(), store), "GET", "/acme/widget/tree/emptydir").Body.String()
+
+	if !strings.Contains(body, `class="tree"`) {
+		t.Errorf("empty non-root directory should still render the table:\n%s", body)
+	}
+	if !strings.Contains(body, `>../</a>`) {
+		t.Errorf("empty non-root directory should render the ../ row:\n%s", body)
+	}
+	if strings.Contains(body, "This directory is empty.") {
+		t.Error("empty non-root directory should not hide the table behind the empty-state message")
+	}
+}
+
+func TestEmptyRootTreeShowsEmptyState(t *testing.T) {
+	store := browseStore()
+	store.onTree = func(_, _, _ string) ([]repos.Entry, error) {
+		return []repos.Entry{}, nil
+	}
+	body := request(newTestHandler(t, readerIdentity(), store), "GET", "/acme/widget/tree").Body.String()
+
+	if !strings.Contains(body, "This directory is empty.") {
+		t.Errorf("empty root should render the empty-state message:\n%s", body)
+	}
+	if strings.Contains(body, `class="tree"`) {
+		t.Error("empty root should not render the table")
+	}
+}

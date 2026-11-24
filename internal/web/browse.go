@@ -37,6 +37,7 @@ type entryView struct {
 	Name string
 	Href string
 	Kind string
+	Icon string
 	Size string
 	Mode string
 }
@@ -292,7 +293,6 @@ func (h *Handler) serveBlob(w http.ResponseWriter, r *http.Request, id authz.Ide
 		ShortHash:  shortHash(commit.Hash),
 		Commit:     commit,
 		Crumbs:     browseCrumbs(name, "blob", path, linkRef),
-		Parent:     parentTreeURL(name, path, linkRef),
 		Blob:       view,
 		Refs:       refOptions(info.Branch, info.Refs, linkRef),
 		FormAction: browseURL(name, "blob", path, ""),
@@ -412,6 +412,7 @@ func treeEntries(name, path, ref string, entries []repos.Entry) []entryView {
 			Name: strings.ToValidUTF8(entry.Name, "\uFFFD"),
 			Href: browseURL(name, route, full, ref),
 			Kind: kind,
+			Icon: iconFor(entry),
 			Size: size,
 			Mode: mode,
 		})
@@ -436,6 +437,67 @@ func describeEntry(mode string, size int64, submodule, symlink, dir bool) (kind,
 		humanSize = formatSize(size)
 	}
 	return kind, humanSize, mode
+}
+
+// iconFor picks the icon for an entry: directory-like kinds first, then the
+// file type derived from the lowercased extension, with dotfiles and lockfiles
+// matched on the exact basename. Unknown names fall back to a generic file
+// icon. Icons only decorate the row; the entry kind stays available as text.
+var extIcons = map[string]string{
+	"md": "doc", "markdown": "doc", "txt": "doc", "adoc": "doc",
+	"go": "code", "rs": "code", "py": "code", "js": "code", "ts": "code",
+	"jsx": "code", "tsx": "code", "c": "code", "h": "code", "cc": "code",
+	"cpp": "code", "hpp": "code", "sh": "code",
+	"png": "image", "jpg": "image", "jpeg": "image", "gif": "image",
+	"svg": "image", "webp": "image",
+	"zip": "archive", "tar": "archive", "gz": "archive", "tgz": "archive",
+	"xz":   "archive",
+	"json": "config", "yaml": "config", "yml": "config", "toml": "config",
+	"ini":  "config",
+	"pdf":  "pdf",
+	"html": "markup", "css": "markup",
+}
+
+var lockfileIcons = map[string]string{
+	"package-lock.json": "lockfile",
+	"yarn.lock":         "lockfile",
+	"pnpm-lock.yaml":    "lockfile",
+	"go.sum":            "lockfile",
+	"cargo.lock":        "lockfile",
+}
+
+var dotfileIcons = map[string]string{
+	".gitignore":     "dotfile",
+	".dockerignore":  "dotfile",
+	".editorconfig":  "dotfile",
+	".env":           "dotfile",
+	".gitattributes": "dotfile",
+}
+
+func iconFor(entry repos.Entry) string {
+	switch {
+	case entry.Dir:
+		return "folder"
+	case entry.Submodule:
+		return "submodule"
+	case entry.Symlink:
+		return "symlink"
+	case entry.Executable:
+		return "executable"
+	}
+	name := strings.ToLower(entry.Name)
+	if icon, ok := lockfileIcons[name]; ok {
+		return icon
+	}
+	if icon, ok := dotfileIcons[name]; ok {
+		return icon
+	}
+	if i := strings.LastIndex(name, "."); i > 0 {
+		if icon, ok := extIcons[name[i+1:]]; ok {
+			return icon
+		}
+	}
+	return "file"
 }
 
 func formatSize(size int64) string {

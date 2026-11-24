@@ -495,9 +495,34 @@ pre {
   font: inherit;
 }
 
-.parent-link {
-  margin-bottom: 14px;
-  font-size: 0.875rem;
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+}
+
+.icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.tree .icon-col,
+.tree .icon-cell {
+  width: 2.5rem;
+  padding-right: 0;
+}
+
+.tree .icon-cell {
+  vertical-align: middle;
 }
 
 .tree .name-cell a {
@@ -669,6 +694,27 @@ pre.blob {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
+  }
+
+  .tree tbody tr {
+    grid-template-columns: auto 1fr;
+  }
+
+  .tree tbody td.icon-cell {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    padding-top: 2px;
+  }
+
+  .tree tbody td.name-cell {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .tree tbody td[data-label="Size"],
+  .tree tbody td[data-label="Mode"] {
+    grid-column: 1 / -1;
   }
 
   tbody tr:last-child {
