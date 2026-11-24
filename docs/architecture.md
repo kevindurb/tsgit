@@ -30,6 +30,7 @@ flowchart LR
     public -- "https://tsgit/public/widget.git" --> tsgit
     tsgit --> state
     tsgit --> repos
+    tsgit -. "push events (opt-in, tailnet)" .-> ci["CI system<br/>(tag on the tailnet)"]
     tsgit -- "WhoIs(peer address)" --> localapi["in-process LocalAPI"]
     tsgit -- "StatusWithoutPeers" --> localapi
 ```
@@ -83,6 +84,7 @@ or spawn git.
 | `internal/repos` | Canonical names, containment, metadata and browsing reads, atomic creation and deletion | a root directory, `git` |
 | `internal/transport` | Smart-HTTP routing and framing, backend seam | `identity`, `authz`, `repos` |
 | `internal/web` | Read-only discovery, code browsing, Markdown rendering, and the admin deletion handler | `identity`, `authz`, `repos` |
+| `internal/hooks` | Push detection, hook policy, signed delivery to CI endpoints | `transport`, `repos`, tsnet HTTP client |
 
 Dependency arrows point one way. `transport` and `web` are the only layers that
 know about a network request; `identity` is the only layer that knows about
@@ -274,6 +276,20 @@ header, streaming stdin and stdout and logging stderr. A pure-Go backend can
 replace it without touching identity, authorization, routing, or repository
 resolution. ADR 0001 still governs the default; ADR 0002 records why the seam
 exists and when a replacement becomes attractive.
+
+### Webhook delivery
+
+After a receive-pack exchange completes, the handler snapshots refs before and
+after (two `for-each-ref` calls) and emits one event per created, updated, or
+deleted ref. Events go to `internal/hooks`, which re-reads the node's
+`cap/hooks` node attribute on every push, matches the repository against each
+hook's `repos` patterns, and delivers a GitHub-shaped `push` payload over the
+node's own tsnet HTTP client — never the host network. Deliveries carry
+`X-GitHub-Event: push` and, when the hook names a `secretEnv`, an
+`X-Hub-Signature-256` HMAC. Delivery is asynchronous: at most three attempts
+with backoff, bounded concurrency (8), and no persistence: it can never block,
+delay, or fail the push, and a push that moved no refs delivers nothing. ADR
+0005 records the reasoning; `docs/access-control.md` documents the capability.
 
 ## Storage
 

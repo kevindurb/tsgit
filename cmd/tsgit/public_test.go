@@ -443,7 +443,7 @@ func TestComposeTailnetUsesTailnetResolverForGit(t *testing.T) {
 	}}
 	publicResolver := &recordingResolver{id: authz.PublicIdentity([]authz.FunnelGrant{{Repos: []string{"public/*"}}})}
 	backend := &recordingBackend{}
-	handler := composeTailnet(store, tailnetResolver, publicResolver, backend, nil, logger)
+	handler := composeTailnet(store, tailnetResolver, publicResolver, backend, nil, nil, logger)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
@@ -465,7 +465,7 @@ func TestComposeTailnetUsesTailnetResolverForGit(t *testing.T) {
 		Grants: []authz.Grant{{Repos: []string{"*/*"}, Access: authz.AccessRead}},
 	}}
 	indexPublic := &recordingResolver{id: authz.PublicIdentity([]authz.FunnelGrant{{Repos: []string{"public/*"}}})}
-	indexHandler := composeTailnet(store, indexResolver, indexPublic, backend, nil, logger)
+	indexHandler := composeTailnet(store, indexResolver, indexPublic, backend, nil, nil, logger)
 
 	rec = httptest.NewRecorder()
 	indexHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

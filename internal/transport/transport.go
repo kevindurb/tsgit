@@ -23,6 +23,23 @@ const (
 	ServiceReceivePack = "git-receive-pack"
 )
 
+// PushEvent reports that a receive-pack exchange completed and which refs
+// moved. Repository is the canonical <namespace>/<repo> name, Path is the
+// bare repository directory, and Changes holds the refs that differ between
+// the snapshots taken before and after the exchange.
+type PushEvent struct {
+	Repo     string
+	Path     string
+	Changes  []repos.RefChange
+	Identity authz.Identity
+}
+
+// PushObserver observes completed push exchanges. It is called synchronously
+// after the response has been sent; implementations must return quickly (a
+// goroutine is the right place for real work). It is only ever called for
+// receive-pack requests, never for reads or denials.
+type PushObserver func(ctx context.Context, ev PushEvent)
+
 // Request is one pack exchange handed to a Backend.
 type Request struct {
 	RepoPath    string
@@ -51,6 +68,11 @@ type Handler struct {
 	// listener sets it so receive-pack and push-to-create cannot reach a
 	// backend even if a grant were misconfigured.
 	ReadOnly bool
+
+	// PushObserver, when non-nil, is called after a receive-pack exchange
+	// completes and at least one ref moved. Nil disables snapshotting and
+	// notification entirely.
+	PushObserver PushObserver
 }
 
 // NewHandler wires a handler.
@@ -122,7 +144,59 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Log.Info("created repository", "repo", rt.name, "node", id.Node)
 	}
 
+	var before map[string]string
+	notify := h.PushObserver != nil && rt.service == ServiceReceivePack && !rt.advertise
+	if notify {
+		snapshot, err := h.Store.SnapshotRefs(r.Context(), repoPath)
+		if err != nil {
+			h.Log.Warn("could not snapshot refs before push; push notifications skipped", "repo", rt.name, "error", err)
+			notify = false
+		} else {
+			before = snapshot
+		}
+	}
+
 	h.serveBackend(w, r, rt, repoPath)
+
+	if notify {
+		after, err := h.Store.SnapshotRefs(r.Context(), repoPath)
+		if err != nil {
+			h.Log.Warn("could not snapshot refs after push; push notifications skipped", "repo", rt.name, "error", err)
+			return
+		}
+		changes := repos.DiffRefs(before, after)
+		if len(changes) == 0 {
+			return
+		}
+		h.annotateForced(r.Context(), repoPath, rt.name, changes)
+		// The observer must not inherit r.Context(): it is canceled as soon
+		// as the handler returns, and observers do their work in the
+		// background.
+		h.PushObserver(context.Background(), PushEvent{
+			Repo:     rt.name,
+			Path:     repoPath,
+			Changes:  changes,
+			Identity: id,
+		})
+	}
+}
+
+// annotateForced flags updated refs whose new value is not a fast-forward of
+// the old. Failures leave Forced false; the payload field is advisory.
+func (h *Handler) annotateForced(ctx context.Context, repoPath, repo string, changes []repos.RefChange) {
+	for i := range changes {
+		ch := &changes[i]
+		if ch.Kind != repos.RefUpdated {
+			continue
+		}
+		fastForward, err := h.Store.IsAncestor(ctx, repoPath, ch.Old, ch.New)
+		if err != nil {
+			h.Log.Warn("could not determine fast-forward ancestry; reporting forced=false",
+				"repo", repo, "ref", ch.Ref, "error", err)
+			continue
+		}
+		ch.Forced = !fastForward
+	}
 }
 
 func (h *Handler) notFound(w http.ResponseWriter) {

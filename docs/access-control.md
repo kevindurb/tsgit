@@ -149,6 +149,85 @@ Funnel client has no peer and no `WhoIs` response, so there is nothing to
 attach them to. Only the node's own `nodeAttrs.app` is consulted. The `funnel`
 attribute alone only enables the transport; it does not publish anything.
 
+## Webhooks (CI notification)
+
+Webhooks are not grants: they confer no read, write, or admin access. They
+configure which HTTP endpoints receive a notification after a push moves refs.
+Like `cap/funnel`, the capability is a **node attribute** under
+`nodeAttrs.app` on the node that runs `tsgit`:
+
+```json
+"nodeAttrs": [{
+  "target": ["tag:tsgit"],
+  "app": {
+    "github.com/kevindurb/tsgit/cap/hooks": [
+      {
+        "repos": ["acme/*"],
+        "url": "http://tekton.tools.ts.net:8080/hook"
+      },
+      {
+        "repos": ["acme/*"],
+        "url": "https://backup-ci.example.ts.net/hook",
+        "secretEnv": "TSGIT_HOOK_BACKUP_CI"
+      }
+    ]
+  }
+}]
+```
+
+<!-- webhooks-capability-fixture -->
+```json
+[
+  {
+    "repos": ["acme/*"],
+    "url": "http://tekton.tools.ts.net:8080/hook"
+  },
+  {
+    "repos": ["acme/*"],
+    "url": "https://backup-ci.example.ts.net/hook",
+    "secretEnv": "TSGIT_HOOK_BACKUP_CI"
+  }
+]
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `repos` | array of strings, required | `path.Match` patterns against the canonical name |
+| `url` | `http` or `https` URL, required | The endpoint to POST to; no userinfo; redirect responses are treated as failures |
+| `secretEnv` | string, optional | Name of the environment variable holding the HMAC-SHA256 key for this hook |
+
+Unknown fields, an empty `repos` list, an invalid pattern, or a URL that is
+not `http`/`https` make the **entry** invalid. Invalid entries are skipped
+and logged; valid sibling entries still fire. The capability is re-read on
+every push, so editing the policy changes hook behavior without a restart.
+A node with no `cap/hooks` attribute sends nothing.
+
+`secretEnv` names a variable, never a value, so the policy stays committable
+to git. `tsgit` reads the variable at delivery time:
+
+- Variable set and non-empty: the delivery carries
+  `X-Hub-Signature-256: sha256=<hex>`, an HMAC-SHA256 over the exact request
+  body. Tekton's GitHub ClusterInterceptor verifies this with `secretRef`.
+- Variable missing or empty: **no request is sent** and an error naming the
+  variable (never its value) is logged. The delivery fails closed.
+- No `secretEnv` at all: the delivery is sent unsigned. The expectation is
+  that the receiving endpoint is reachable only from `tag:tsgit`, enforced by
+  an ACL grant such as `{"src": ["tag:tsgit"], "dst": ["tag:ci:8080"], "ip": ["tcp:8080"]}`.
+
+Scope the hook receiver accordingly. Any tailnet node that can reach the
+endpoint can invoke it; without a signature check and without an ACL scoping,
+a wrong POST only triggers a CI run of an existing repository state, but that
+is still more surface than most deployments want.
+
+The payload contains the ref, the old and new object IDs, `created` /
+`deleted` / `forced` flags, the repository's name and clone URL, and the
+pusher's login or node name. It carries no file contents and grants nothing;
+cloning the repository still requires `cap/repo`.
+
+Deliveries are best-effort: one POST per changed ref, up to three attempts,
+no persistence, no ordering guarantee. A failed delivery never affects the
+push. See ADR 0005 for the rationale.
+
 ## Tagged machines
 
 Authorization uses the node's identity, not a user. A machine carrying

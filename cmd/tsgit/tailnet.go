@@ -114,6 +114,17 @@ func (t *tailnet) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsR
 	return t.client.WhoIs(ctx, remoteAddr)
 }
 
+// HTTPClient returns the node's own HTTP client; outbound requests made with
+// it travel the tailnet, never the host network. Redirects are not followed:
+// webhook deliveries treat a redirect as a failure, not as a new location.
+func (t *tailnet) HTTPClient() *http.Client {
+	c := t.server.HTTPClient()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return c
+}
+
 // StatusWithoutPeers reports the node's own capabilities for the public
 // resolver. It is an in-process LocalAPI call and omits the peer list.
 func (t *tailnet) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
@@ -153,11 +164,12 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 			"cert_domains", len(domains), "capability", hasHTTPS)
 	}
 
+	dispatcher := newTailnetWebhooks(node, cloneBaseURL("http", cfg.Hostname, cfg.HTTPPort), logger)
 	ln, err := node.Listen("tcp", ":"+strconv.Itoa(cfg.HTTPPort))
 	if err != nil {
 		return fmt.Errorf("listen on tailnet:%d: %w", cfg.HTTPPort, err)
 	}
-	handler, err := newTailnetHandler(store, node, secret, logger, false)
+	handler, err := newTailnetHandler(store, node, secret, logger, false, dispatcher.OnPush)
 	if err != nil {
 		return err
 	}
@@ -170,8 +182,9 @@ func serveTailnet(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 }
 
 // newTailnetHandler builds the private front end: tailnet identity, write
-// support, and optionally a badge marking repositories that are also public.
-func newTailnetHandler(store *repos.Store, node *tailnet, secret []byte, logger *slog.Logger, markPublic bool) (http.Handler, error) {
+// support, optionally a push observer, and optionally a badge marking
+// repositories that are also public.
+func newTailnetHandler(store *repos.Store, node *tailnet, secret []byte, logger *slog.Logger, markPublic bool, observer transport.PushObserver) (http.Handler, error) {
 	var publicResolver identity.Resolver
 	if markPublic {
 		publicResolver = identity.NewFunnel(node, logger)
@@ -188,14 +201,15 @@ func newTailnetHandler(store *repos.Store, node *tailnet, secret []byte, logger 
 		return nil, err
 	}
 	return composeTailnet(store, resolver, publicResolver,
-		&transport.GitBin{Git: store.GitPath(), Log: logger}, del, logger), nil
+		&transport.GitBin{Git: store.GitPath(), Log: logger}, del, observer, logger), nil
 }
 
 // composeTailnet wires the tailnet resolver into both front ends. The public
 // resolver, when present, is used only for the exposure badge. The delete
 // handler is nil when the caller does not want the lifecycle surface.
-func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolver, backend transport.Backend, del *web.DeleteHandler, logger *slog.Logger) http.Handler {
+func composeTailnet(store *repos.Store, resolver, publicResolver identity.Resolver, backend transport.Backend, del *web.DeleteHandler, observer transport.PushObserver, logger *slog.Logger) http.Handler {
 	gitHandler := transport.NewHandler(resolver, store, backend, logger)
+	gitHandler.PushObserver = observer
 	webConfig := web.Config{
 		Resolver: resolver,
 		Store:    store,
@@ -250,7 +264,8 @@ func serveTLS(ctx context.Context, cfg *config.Config, store *repos.Store, node 
 
 	publicLn, publicOn := openFunnelListener(cfg, node.status.Self, domains, node.ListenFunnel, logger)
 
-	tailnetHandler, err := newTailnetHandler(store, node, secret, logger, publicOn)
+	dispatcher := newTailnetWebhooks(node, cloneBaseURL("https", domains[0], cfg.Port), logger)
+	tailnetHandler, err := newTailnetHandler(store, node, secret, logger, publicOn, dispatcher.OnPush)
 	if err != nil {
 		return err
 	}

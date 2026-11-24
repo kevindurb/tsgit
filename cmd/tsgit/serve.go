@@ -47,12 +47,14 @@ func serveDev(ctx context.Context, cfg *config.Config, logger *slog.Logger) erro
 	}
 
 	resolver := identity.Fixed{Identity: identity.Development()}
+	webhooks := newDevWebhooks(cfg, logger)
 	gitHandler := transport.NewHandler(
 		resolver,
 		store,
 		&transport.GitBin{Git: store.GitPath(), Log: logger},
 		logger,
 	)
+	gitHandler.PushObserver = webhooks.OnPush
 	ui := web.New(web.Config{
 		Resolver: resolver,
 		Store:    store,

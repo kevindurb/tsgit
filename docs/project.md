@@ -27,6 +27,9 @@ In scope:
   contents, branch/tag/commit selection, and safely rendered README Markdown.
 - Deleting a repository from the discovery UI when the viewer has `admin`
   access, with a typed confirmation and no separate configuration.
+- Best-effort push webhooks to operator-configured, tailnet-reachable
+  endpoints, configured in the tailnet policy, for external CI systems to
+  consume; delivery is a notification, never a pipeline run.
 - Running as a single binary on one tailnet node, with no host Tailscale
   daemon and no account system.
 - Optional, read-only public clone and browsing of a curated subset of
@@ -48,7 +51,9 @@ Out of scope:
 - Creating or renaming repositories from the web UI. Creation remains the
   result of an authorized git push; renaming is a client-side mirror-push plus
   delete. Deleting a repository is an admin-gated web action.
-- CI/CD. `tsgit` hosts code; it does not test it.
+- CI/CD. `tsgit` hosts code; it does not test it. It can notify external
+  automation over the tailnet after a push (see the `webhook-delivery`
+  capability), but it never runs, schedules, or gates pipelines itself.
 - Federation or mirroring between tailnets.
 
 ## Non-goals worth naming
